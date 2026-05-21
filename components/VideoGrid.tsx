@@ -1,7 +1,7 @@
 "use client";
 
-import { Flower2, Leaf, Video } from "lucide-react";
-import type { RefObject } from "react";
+import { Flower2, Frown, Leaf } from "lucide-react";
+import type { ReactNode, RefObject } from "react";
 import type { Language } from "@/lib/i18n";
 import { t } from "@/lib/i18n";
 
@@ -13,6 +13,8 @@ export function VideoGrid({
   hasRemoteVideo,
   isLocalSpeaking,
   localName,
+  localAction,
+  hasRemoteParticipant,
   remoteName,
   remoteStatus
 }: {
@@ -23,6 +25,8 @@ export function VideoGrid({
   hasRemoteVideo: boolean;
   isLocalSpeaking: boolean;
   localName: string;
+  localAction?: ReactNode;
+  hasRemoteParticipant: boolean;
   remoteName: string;
   remoteStatus: string;
 }) {
@@ -61,30 +65,41 @@ export function VideoGrid({
             {hasLocalVideo ? t(language, "cameraOn") : t(language, "audioOnly")}
           </p>
         </div>
+        {localAction ? <div className="shrink-0">{localAction}</div> : null}
       </article>
 
-      <article className="audio-card">
-        <div className="audio-avatar">
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className={`audio-video ${hasRemoteVideo ? "opacity-100" : "opacity-0"}`}
-          />
-          {!hasRemoteVideo ? (
-            <Leaf className="garden-icon-soft h-7 w-7" aria-hidden="true" />
-          ) : null}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Video className="garden-icon-lilac h-4 w-4 shrink-0" aria-hidden="true" />
-            <p className="garden-text-ink truncate text-base font-black">
-              {remoteName}
-            </p>
+      {hasRemoteParticipant ? (
+        <article className="audio-card">
+          <div className="audio-avatar">
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className={`audio-video ${hasRemoteVideo ? "opacity-100" : "opacity-0"}`}
+            />
+            {!hasRemoteVideo ? (
+              <Leaf className="garden-icon-soft h-7 w-7" aria-hidden="true" />
+            ) : null}
           </div>
-          <p className="garden-text-muted mt-1 text-sm font-bold">{remoteStatus}</p>
-        </div>
-      </article>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="garden-text-ink truncate text-base font-black">
+                {remoteName}
+              </p>
+            </div>
+            <p className="garden-text-muted mt-1 text-sm font-bold">{remoteStatus}</p>
+          </div>
+        </article>
+      ) : (
+        <article
+          className="audio-card audio-card-empty-peer"
+          aria-label={t(language, "waitingForOther")}
+        >
+          <div className="audio-empty-face">
+            <Frown className="h-7 w-7" aria-hidden="true" />
+          </div>
+        </article>
+      )}
     </section>
   );
 }

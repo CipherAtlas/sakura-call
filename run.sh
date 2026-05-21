@@ -85,8 +85,11 @@ for port in "${PORTS_TO_CLEAR[@]}"; do
   stop_port_processes "$port"
 done
 
-echo "Starting app server on http://localhost:3010..."
-npm run dev:public &
+echo "Building production app..."
+npm run build
+
+echo "Starting production app server on http://localhost:3010..."
+npm run start:public &
 app_pid=$!
 
 echo "Starting Cloudflare tunnel..."

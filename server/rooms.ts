@@ -42,6 +42,19 @@ function generateRoomCode() {
   return crypto.randomInt(0, 10000).toString().padStart(4, "0");
 }
 
+function generateUniqueRoomCode() {
+  for (let attempt = 0; attempt < 10000; attempt += 1) {
+    const roomCode = generateRoomCode();
+    const isInUse = [...rooms.values()].some((room) => room.roomCode === roomCode);
+
+    if (!isInUse) {
+      return roomCode;
+    }
+  }
+
+  throw new Error("No room codes available");
+}
+
 function cleanupRooms() {
   const now = Date.now();
 
@@ -62,7 +75,7 @@ export function createRoom(spokenLanguage: Language): Room {
 
   const room: Room = {
     roomId,
-    roomCode: generateRoomCode(),
+    roomCode: generateUniqueRoomCode(),
     creatorSecret: crypto.randomBytes(24).toString("base64url"),
     createdAt: Date.now(),
     subtitleServiceStarted: false,
@@ -79,6 +92,18 @@ export function createRoom(spokenLanguage: Language): Room {
 export function getRoom(roomId: string): Room | undefined {
   cleanupRooms();
   return rooms.get(roomId);
+}
+
+export function getRoomByCode(roomCode: string): Room | undefined {
+  cleanupRooms();
+
+  for (const room of rooms.values()) {
+    if (room.roomCode === roomCode) {
+      return room;
+    }
+  }
+
+  return undefined;
 }
 
 export function roomExists(roomId: string) {
@@ -211,13 +236,33 @@ export function startSubtitleService(roomId: string, participantId: string) {
   return true;
 }
 
+export function stopSubtitleService(roomId: string, participantId: string) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+
+  if (!room || !participant?.isHost) {
+    return false;
+  }
+
+  room.subtitleServiceStarted = false;
+  return true;
+}
+
 export function leaveRoom(roomId: string, participantId: string) {
   const room = getRoom(roomId);
   if (!room) {
-    return;
+    return { roomEnded: false, participant: undefined };
+  }
+
+  const participant = room.participants.get(participantId);
+
+  if (participant?.isHost) {
+    rooms.delete(roomId);
+    return { roomEnded: true, participant };
   }
 
   room.participants.delete(participantId);
+  return { roomEnded: false, participant };
 }
 
 export function updateParticipantLanguage(

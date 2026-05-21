@@ -8,6 +8,7 @@
     "dev:public": "PORT=3010 tsx server/index.ts",
     "build": "next build",
     "start": "NODE_ENV=production tsx server/index.ts",
+    "start:public": "NODE_ENV=production PORT=3010 tsx server/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "tunnel:setup": "CLOUDFLARE_SERVICE_URL=http://localhost:3010 node scripts/cloudflare-tunnel.mjs setup",

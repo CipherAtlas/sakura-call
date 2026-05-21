@@ -9,6 +9,7 @@ import {
   createRoom,
   creatorCookieName,
   getRoom,
+  getRoomByCode,
   isCreatorSecret,
   roomExists
 } from "./rooms";
@@ -25,6 +26,13 @@ const handle = app.getRequestHandler();
 const publicHostname = process.env.CLOUDFLARE_HOSTNAME || "call.sabarg.com";
 const hstsHeaderValue = "max-age=31536000; includeSubDomains";
 
+type RateLimitState = {
+  count: number;
+  resetAt: number;
+};
+
+const joinCodeRateLimits = new Map<string, RateLimitState>();
+
 function headerValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -38,6 +46,37 @@ function forwardedProto(request: IncomingMessage) {
     ?.split(",")[0]
     ?.trim()
     .toLowerCase();
+}
+
+function requestIp(request: IncomingMessage) {
+  const forwardedFor = headerValue(request.headers["x-forwarded-for"]);
+  return (
+    forwardedFor?.split(",")[0]?.trim() ??
+    request.socket.remoteAddress ??
+    "unknown"
+  );
+}
+
+function consumeRateLimit(
+  bucket: Map<string, RateLimitState>,
+  key: string,
+  max: number,
+  windowMs: number
+) {
+  const now = Date.now();
+  const state = bucket.get(key);
+
+  if (!state || state.resetAt <= now) {
+    bucket.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+
+  if (state.count >= max) {
+    return false;
+  }
+
+  state.count += 1;
+  return true;
 }
 
 function isLocalHost(host: string) {
@@ -142,6 +181,48 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
         "set-cookie": cookie
       }
     );
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/rooms/join") {
+    if (
+      !consumeRateLimit(
+        joinCodeRateLimits,
+        `join-code:${requestIp(request)}`,
+        12,
+        60_000
+      )
+    ) {
+      sendJson(response, 429, { error: "too-many-attempts" });
+      return true;
+    }
+
+    const body = (await readJson(request).catch(() => null)) as {
+      roomCode?: unknown;
+    } | null;
+    const roomCode =
+      typeof body?.roomCode === "string"
+        ? body.roomCode.replace(/\D/g, "").slice(0, 4)
+        : "";
+
+    if (!/^\d{4}$/.test(roomCode)) {
+      sendJson(response, 400, { error: "invalid-code" });
+      return true;
+    }
+
+    const room = getRoomByCode(roomCode);
+
+    if (!room) {
+      sendJson(response, 404, { error: "room-not-found" });
+      return true;
+    }
+
+    if (room.participants.size >= 2) {
+      sendJson(response, 409, { error: "room-full" });
+      return true;
+    }
+
+    sendJson(response, 200, { roomId: room.roomId });
     return true;
   }
 

@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
-import { isSupportedLanguage, oppositeLanguage } from "../lib/i18n";
+import { isSupportedLanguage } from "../lib/i18n";
+import type { Language } from "../lib/i18n";
 import {
   isTranscriptionConfigured,
   transcribeSpeech
@@ -14,7 +15,9 @@ import {
   isCreatorSecret,
   joinRoom,
   leaveRoom,
+  Participant,
   startSubtitleService,
+  stopSubtitleService,
   updateParticipantLanguage
 } from "./rooms";
 
@@ -98,6 +101,63 @@ function emitToOtherParticipant(
       io.to(participant.socketId).emit(event, payload);
     }
   }
+}
+
+function emitRoomEnded(io: Server, roomId: string, endedBy: string) {
+  io.to(roomId).emit("room:ended", {
+    roomId,
+    endedBy
+  });
+  void io.in(roomId).socketsLeave(roomId);
+}
+
+async function captionTextForLanguage({
+  originalText,
+  originalLanguage,
+  targetLanguage
+}: {
+  originalText: string;
+  originalLanguage: Language;
+  targetLanguage: Language;
+}) {
+  if (originalLanguage === targetLanguage) {
+    return originalText;
+  }
+
+  return translateText({
+    text: originalText,
+    sourceLanguage: originalLanguage,
+    targetLanguage
+  });
+}
+
+function buildCaption({
+  roomId,
+  speaker,
+  originalText,
+  translatedLanguage,
+  translatedText,
+  isFinal,
+  timestamp
+}: {
+  roomId: string;
+  speaker: Participant;
+  originalText: string;
+  translatedLanguage: Language;
+  translatedText: string;
+  isFinal: boolean;
+  timestamp: number;
+}): CaptionEvent {
+  return {
+    roomId,
+    speakerId: speaker.participantId,
+    originalLanguage: speaker.spokenLanguage,
+    originalText,
+    translatedLanguage,
+    translatedText,
+    isFinal,
+    timestamp
+  };
 }
 
 export function createSignalingServer(httpServer: HttpServer) {
@@ -184,6 +244,27 @@ export function createSignalingServer(httpServer: HttpServer) {
       callback?.({ ok: true });
     });
 
+    socket.on("subtitle:stop-service", (payload, callback) => {
+      const roomId = String(payload?.roomId ?? "");
+      const participantId = String(payload?.participantId ?? "");
+
+      if (!consumeRateLimit(`subtitle:stop:${socket.id}`, 8, 60_000)) {
+        callback?.({ ok: false, reason: "RATE_LIMITED" });
+        return;
+      }
+
+      if (!stopSubtitleService(roomId, participantId)) {
+        callback?.({ ok: false, reason: "HOST_ONLY" });
+        return;
+      }
+
+      io.to(roomId).emit("subtitle:service-stopped", {
+        roomId,
+        stoppedBy: participantId
+      });
+      callback?.({ ok: true });
+    });
+
     socket.on("participant:language", (payload) => {
       const roomId = String(payload?.roomId ?? "");
       const participantId = String(payload?.participantId ?? "");
@@ -236,11 +317,9 @@ export function createSignalingServer(httpServer: HttpServer) {
       }
 
       try {
-        const originalLanguage = participant.spokenLanguage;
-        const translatedLanguage = oppositeLanguage(originalLanguage);
         const originalText = await transcribeSpeech({
           audio,
-          language: originalLanguage,
+          language: participant.spokenLanguage,
           isFinal: payload.isFinal
         });
 
@@ -248,36 +327,40 @@ export function createSignalingServer(httpServer: HttpServer) {
           return;
         }
 
-        const translatedText = await translateText({
-          text: originalText,
-          sourceLanguage: originalLanguage,
-          targetLanguage: translatedLanguage
-        });
+        const timestamp = Date.now();
 
-        if (!translatedText) {
-          return;
+        for (const recipient of room.participants.values()) {
+          if (recipient.participantId === participant.participantId) {
+            continue;
+          }
+
+          if (!recipient.socketId) {
+            continue;
+          }
+
+          const translatedText = await captionTextForLanguage({
+            originalText,
+            originalLanguage: participant.spokenLanguage,
+            targetLanguage: recipient.spokenLanguage
+          });
+
+          if (!translatedText) {
+            continue;
+          }
+
+          const caption = buildCaption({
+            roomId: payload.roomId,
+            speaker: participant,
+            originalText,
+            translatedLanguage: recipient.spokenLanguage,
+            translatedText,
+            isFinal: payload.isFinal,
+            timestamp
+          });
+
+          io.to(recipient.socketId).emit("caption", caption);
+          socket.emit("caption:preview", caption);
         }
-
-        const caption: CaptionEvent = {
-          roomId: payload.roomId,
-          speakerId: payload.participantId,
-          originalLanguage,
-          originalText,
-          translatedLanguage,
-          translatedText,
-          isFinal: payload.isFinal,
-          timestamp: Date.now()
-        };
-
-        emitToOtherParticipant(
-          io,
-          payload.roomId,
-          payload.participantId,
-          "caption",
-          caption
-        );
-
-        socket.emit("caption:preview", caption);
       } catch (error) {
         socket.emit("caption:error", {
           message: error instanceof Error ? error.message : "subtitle-error"
@@ -288,11 +371,17 @@ export function createSignalingServer(httpServer: HttpServer) {
     socket.on("room:leave", (payload) => {
       const roomId = String(payload?.roomId ?? "");
       const participantId = String(payload?.participantId ?? "");
-      leaveRoom(roomId, participantId);
-      socket.leave(roomId);
+      const leaveResult = leaveRoom(roomId, participantId);
+
+      if (leaveResult.roomEnded) {
+        emitRoomEnded(io, roomId, participantId);
+        return;
+      }
+
       emitToOtherParticipant(io, roomId, participantId, "peer:left", {
         participantId
       });
+      socket.leave(roomId);
       emitRoomStatus(io, roomId);
     });
 
@@ -302,7 +391,13 @@ export function createSignalingServer(httpServer: HttpServer) {
         return;
       }
 
-      leaveRoom(match.room.roomId, match.participant.participantId);
+      const leaveResult = leaveRoom(match.room.roomId, match.participant.participantId);
+
+      if (leaveResult.roomEnded) {
+        emitRoomEnded(io, match.room.roomId, match.participant.participantId);
+        return;
+      }
+
       emitToOtherParticipant(
         io,
         match.room.roomId,

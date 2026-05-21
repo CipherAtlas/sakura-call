@@ -2,6 +2,9 @@ import OpenAI, { toFile } from "openai";
 import type { Language } from "./i18n";
 
 const transcriptionModel = "gpt-4o-mini-transcribe";
+const nonEnglishScriptPattern =
+  /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/u;
+const hangulScriptPattern = /[\uac00-\ud7af]/u;
 
 let client: OpenAI | null = null;
 
@@ -21,12 +24,48 @@ export function isTranscriptionConfigured() {
   return Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
-function transcriptionPrompt(language: Language) {
+function transcriptionPrompt(language: Language, strict = false) {
   if (language === "en") {
-    return "Live two-person conversation. Transcribe natural spoken English.";
+    return strict
+      ? "The speaker selected English and will only speak English. Transcribe only in English Latin letters. Never output Japanese, Korean, Chinese, kana, kanji, or hangul. Short reactions must be written as English words such as aww, oh, ah, huh, hmm. If the audio is unclear, return the closest English transcription only."
+      : "Live two-person conversation. The speaker selected English and will only speak English. Transcribe natural spoken English using English Latin letters. Write short reactions as English words such as aww, oh, ah, huh, hmm.";
   }
 
-  return "ライブの二人会話です。自然な日本語の発話を文字起こししてください。";
+  return strict
+    ? "話者は日本語を選択しており、日本語だけを話します。自然な日本語として文字起こししてください。韓国語やハングルは出力しないでください。外来語、固有名詞、ブランド名、略語、OK、AI、Wi-Fiなど、日本語会話で自然に使われる英字表記は許可します。音声が不明瞭な場合も、最も近い日本語会話の文字起こしだけを返してください。"
+    : "ライブの二人会話です。話者は日本語を選択しており、日本語だけを話します。自然な日本語の発話を文字起こししてください。外来語、固有名詞、ブランド名、略語、OK、AI、Wi-Fiなど、日本語会話で自然に使われる英字表記はそのまま許可します。";
+}
+
+function hasWrongScript(text: string, language: Language) {
+  if (language === "en") {
+    return nonEnglishScriptPattern.test(text);
+  }
+
+  return hangulScriptPattern.test(text);
+}
+
+async function transcribeWithPrompt({
+  audio,
+  language,
+  strict
+}: {
+  audio: Buffer;
+  language: Language;
+  strict: boolean;
+}) {
+  const file = await toFile(audio, `speech-${Date.now()}.wav`, {
+    type: "audio/wav"
+  });
+
+  const transcription = await getOpenAIClient().audio.transcriptions.create({
+    file,
+    model: transcriptionModel,
+    language,
+    response_format: "json",
+    prompt: transcriptionPrompt(language, strict)
+  });
+
+  return transcription.text?.trim() ?? "";
 }
 
 export async function transcribeSpeech({
@@ -38,19 +77,23 @@ export async function transcribeSpeech({
   language: Language;
   isFinal: boolean;
 }): Promise<string> {
-  const file = await toFile(audio, `speech-${Date.now()}.wav`, {
-    type: "audio/wav"
-  });
-
-  const transcription = await getOpenAIClient().audio.transcriptions.create({
-    file,
-    model: transcriptionModel,
+  let text = await transcribeWithPrompt({
+    audio,
     language,
-    response_format: "json",
-    prompt: transcriptionPrompt(language)
+    strict: false
   });
 
-  const text = transcription.text?.trim() ?? "";
+  if (text && hasWrongScript(text, language)) {
+    text = await transcribeWithPrompt({
+      audio,
+      language,
+      strict: true
+    });
+  }
+
+  if (text && hasWrongScript(text, language)) {
+    return "";
+  }
 
   if (!isFinal && text.length < 2) {
     return "";

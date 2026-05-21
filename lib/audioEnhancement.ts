@@ -5,8 +5,8 @@ export type EnhancedMicrophoneStream = {
   stop: () => void;
 };
 
-const minGateGain = 0.32;
-const noiseFloorSmoothing = 0.98;
+const minGateGain = 0.08;
+const noiseFloorSmoothing = 0.992;
 
 function calculateRms(input: Float32Array): number {
   if (input.length === 0) {
@@ -26,29 +26,29 @@ function calculateRms(input: Float32Array): number {
 function createSoftNoiseGate(context: AudioContext): ScriptProcessorNode {
   const gate = context.createScriptProcessor(1024, 1, 1);
   let gateGain = 1;
-  let noiseFloor = 0.006;
+  let noiseFloor = 0.0045;
 
   gate.onaudioprocess = (event) => {
     const input = event.inputBuffer.getChannelData(0);
     const output = event.outputBuffer.getChannelData(0);
     const rms = calculateRms(input);
 
-    if (rms < 0.018) {
+    if (rms < 0.024) {
       noiseFloor = noiseFloor * noiseFloorSmoothing + rms * (1 - noiseFloorSmoothing);
     }
 
-    const threshold = Math.max(0.012, noiseFloor * 2.6);
-    const fullyOpenAt = threshold * 1.75;
+    const threshold = Math.max(0.014, noiseFloor * 3.4);
+    const fullyOpenAt = threshold * 2.25;
+    const openRatio = Math.max(
+      0,
+      Math.min(1, (rms - threshold) / Math.max(fullyOpenAt - threshold, 0.001))
+    );
+    const curvedOpenRatio = openRatio * openRatio;
     const targetGain =
       rms <= threshold
         ? minGateGain
-        : Math.min(
-            1,
-            minGateGain +
-              ((rms - threshold) / Math.max(fullyOpenAt - threshold, 0.001)) *
-                (1 - minGateGain)
-          );
-    const smoothing = targetGain > gateGain ? 0.22 : 0.08;
+        : Math.min(1, minGateGain + curvedOpenRatio * (1 - minGateGain));
+    const smoothing = targetGain > gateGain ? 0.34 : 0.045;
 
     gateGain += (targetGain - gateGain) * smoothing;
 
@@ -98,20 +98,20 @@ export async function createEnhancedMicrophoneStream(
     const destination = context.createMediaStreamDestination();
 
     highPass.type = "highpass";
-    highPass.frequency.value = 85;
-    highPass.Q.value = 0.7;
+    highPass.frequency.value = 120;
+    highPass.Q.value = 0.9;
 
     lowPass.type = "lowpass";
-    lowPass.frequency.value = 7800;
-    lowPass.Q.value = 0.7;
+    lowPass.frequency.value = 5600;
+    lowPass.Q.value = 0.85;
 
-    compressor.threshold.value = -28;
-    compressor.knee.value = 18;
-    compressor.ratio.value = 2.4;
-    compressor.attack.value = 0.004;
-    compressor.release.value = 0.18;
+    compressor.threshold.value = -24;
+    compressor.knee.value = 12;
+    compressor.ratio.value = 1.8;
+    compressor.attack.value = 0.008;
+    compressor.release.value = 0.24;
 
-    presence.gain.value = 1.08;
+    presence.gain.value = 0.96;
 
     source
       .connect(highPass)

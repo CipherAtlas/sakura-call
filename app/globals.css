@@ -221,6 +221,14 @@ video {
   color: #fffdf8;
 }
 
+.garden-leave-bar {
+  background: linear-gradient(135deg, #ff2f55 0%, #e00034 48%, #b70038 100%);
+  box-shadow:
+    0 18px 34px rgba(183, 0, 56, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  color: #fffdf8;
+}
+
 .garden-button:disabled {
   background: linear-gradient(135deg, #eadce3, #d8c4ce);
   box-shadow: none;
@@ -288,11 +296,6 @@ video {
   --tw-ring-color: rgba(217, 93, 138, 0.24);
 }
 
-.garden-invite-surface {
-  background: var(--gradient-panel-strong);
-  --tw-ring-color: rgba(213, 111, 180, 0.12);
-}
-
 .garden-alert-error {
   background: linear-gradient(135deg, rgba(255, 237, 241, 0.94), rgba(255, 218, 227, 0.9));
   border: 1px solid rgba(233, 85, 120, 0.26);
@@ -303,6 +306,22 @@ video {
   background: linear-gradient(135deg, rgba(255, 247, 226, 0.94), rgba(255, 222, 231, 0.9));
   border: 1px solid rgba(237, 165, 79, 0.3);
   color: #8b4a33;
+}
+
+.subtitle-service-toast {
+  animation: subtitle-toast-in 220ms ease-out both;
+  position: relative;
+}
+
+.subtitle-service-toast-bar {
+  animation: subtitle-toast-drain 5000ms linear forwards;
+  background: var(--gradient-primary);
+  bottom: 0;
+  height: 4px;
+  left: 0;
+  position: absolute;
+  transform-origin: left center;
+  width: 100%;
 }
 
 .garden-status-soft {
@@ -351,6 +370,28 @@ video {
     0 0 0 2px rgba(244, 128, 168, 0.58),
     0 0 0 7px rgba(181, 139, 234, 0.15),
     0 16px 34px rgba(160, 72, 111, 0.13);
+}
+
+.audio-card-empty-peer {
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.34), rgba(255, 241, 248, 0.22)),
+    rgba(255, 250, 253, 0.36);
+  border: 2px dashed rgba(217, 93, 138, 0.3);
+  box-shadow: none;
+  justify-content: center;
+}
+
+.audio-empty-face {
+  align-items: center;
+  background: var(--gradient-video);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 0.5rem;
+  color: #fffdf8;
+  display: inline-flex;
+  height: 4.25rem;
+  justify-content: center;
+  opacity: 0.88;
+  width: 4.25rem;
 }
 
 .audio-avatar {
@@ -433,8 +474,44 @@ video {
   box-shadow: 0 0 0 6px rgba(244, 128, 168, 0.18);
 }
 
+.call-shell-active {
+  height: calc(100dvh - 7rem);
+}
+
+.call-active-layout {
+  display: flex;
+  flex-direction: column;
+}
+
 .subtitle-panel {
   background: var(--gradient-panel-strong);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.subtitle-focus-card {
+  flex: 1 1 auto;
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  overflow: hidden;
+}
+
+.subtitle-focus-card .subtitle-panel {
+  min-height: 0;
+}
+
+.subtitle-panel-embedded {
+  background: transparent;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.subtitle-panel-embedded + .subtitle-panel-embedded {
+  border-top: 1px solid rgba(217, 93, 138, 0.18);
+  padding-top: 0.75rem;
+}
+
+.subtitle-focus-card .subtitle-chat-scroll,
+.subtitle-focus-card .subtitle-chat-scroll.is-preview {
+  max-height: none;
+  min-height: 0;
 }
 
 .subtitle-text {
@@ -442,25 +519,154 @@ video {
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 
-.subtitle-log-scroll {
-  max-height: min(24dvh, 14rem);
+.subtitle-chat-scroll {
+  min-height: min(34dvh, 18rem);
+  max-height: min(42dvh, 22rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 0.25rem;
 }
 
-.garden-preview-panel .subtitle-log-scroll {
-  max-height: 12rem;
+.subtitle-chat-scroll.is-preview {
+  min-height: 10rem;
+  max-height: 13rem;
 }
 
-.subtitle-log-scroll:focus-visible {
+.subtitle-chat-scroll:focus-visible {
   outline: 3px solid rgba(244, 128, 168, 0.28);
   outline-offset: 2px;
 }
 
-.subtitle-log-entry {
+.subtitle-chat-message {
   background: rgba(255, 255, 255, 0.42);
   border: 1px solid rgba(217, 93, 138, 0.18);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-self: stretch;
+  min-height: 4.4rem;
+}
+
+.subtitle-chat-message.is-active {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(217, 93, 138, 0.3);
+}
+
+.subtitle-message-time {
+  color: var(--garden-muted);
+  font-size: 0.68rem;
+  font-weight: 950;
+  justify-self: end;
+  line-height: 1;
+  margin-top: 0.45rem;
+  opacity: 0.82;
+}
+
+@media (max-width: 640px) {
+  .call-shell-active {
+    height: calc(100svh - 6.75rem);
+    max-height: calc(100svh - 6.75rem);
+  }
+
+  .call-active-layout {
+    gap: 0.5rem;
+  }
+
+  .call-active-layout > .garden-panel:first-child {
+    padding: 0.7rem;
+  }
+
+  .call-active-layout > .garden-panel:first-child .garden-kicker {
+    font-size: 0.68rem;
+  }
+
+  .call-active-layout > .garden-panel:first-child .garden-title {
+    font-size: 1.45rem;
+    margin-top: 0.25rem;
+  }
+
+  .audio-participants {
+    gap: 0.5rem;
+  }
+
+  .audio-card {
+    gap: 0.65rem;
+    min-height: 3.75rem;
+    padding: 0.45rem 0.55rem;
+  }
+
+  .audio-avatar {
+    height: 2.65rem;
+    width: 2.65rem;
+  }
+
+  .audio-avatar > svg {
+    height: 1.35rem;
+    width: 1.35rem;
+  }
+
+  .audio-card .garden-text-ink {
+    font-size: 0.98rem;
+  }
+
+  .audio-card .garden-text-muted {
+    font-size: 0.76rem;
+    margin-top: 0.1rem;
+  }
+
+  .subtitle-focus-card {
+    gap: 0.6rem;
+    grid-template-rows: minmax(0, 1.8fr) minmax(0, 1fr);
+    padding: 0.7rem;
+  }
+
+  .subtitle-panel {
+    padding: 0;
+  }
+
+  .subtitle-panel-embedded > div:first-child {
+    margin-bottom: 0.45rem;
+  }
+
+  .subtitle-panel-embedded h2 {
+    font-size: 0.98rem;
+    line-height: 1.08;
+  }
+
+  .subtitle-panel-embedded h2 svg {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .subtitle-panel-embedded .garden-status-final,
+  .subtitle-panel-embedded .garden-status-partial {
+    font-size: 0.68rem;
+    padding: 0.2rem 0.55rem;
+  }
+
+  .subtitle-chat-message {
+    min-height: 3.85rem;
+    padding: 0.55rem;
+  }
+
+  .subtitle-text {
+    font-size: 1rem;
+    line-height: 1.15;
+  }
+
+  .subtitle-message-time {
+    font-size: 0.64rem;
+    margin-top: 0.35rem;
+  }
+
+  .subtitle-chat-scroll {
+    max-height: none;
+    min-height: 0;
+  }
+
+  .subtitle-chat-scroll.is-preview {
+    max-height: 11rem;
+    min-height: 8rem;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -512,5 +718,27 @@ video {
 
   50% {
     transform: scale(1.2);
+  }
+}
+
+@keyframes subtitle-toast-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-1rem);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes subtitle-toast-drain {
+  0% {
+    transform: scaleX(1);
+  }
+
+  100% {
+    transform: scaleX(0);
   }
 }

@@ -1,6 +1,6 @@
 # Sakura Call
 
-Sakura Call is a local-development MVP for a private two-person WebRTC audio/video call with live translated subtitles between English and Japanese.
+Sakura Call is a local-development MVP for a private two-person WebRTC audio call with live translated subtitles between English and Japanese.
 
 The app is built for quick testing with another person over HTTPS using Cloudflare Tunnel. It is not production infrastructure yet.
 
@@ -8,13 +8,13 @@ The app is built for quick testing with another person over HTTPS using Cloudfla
 
 - Creates private two-person rooms.
 - Supports English and Japanese only.
-- Gives the room creator an invite link and a 4-digit room code.
+- Gives the room creator a 4-digit room code.
 - Blocks a third participant from joining.
-- Runs peer-to-peer WebRTC audio/video between the two browsers.
+- Runs peer-to-peer WebRTC audio between the two browsers.
 - Uses Socket.IO for room state, signaling, reconnects, and subtitle events.
 - Captures the local microphone stream, segments speech in the browser, sends short WAV chunks to the server, transcribes them, translates them, and sends translated subtitles to the other participant.
 - Shows the speaker a local preview of what the other participant receives.
-- Falls back to audio-only if camera access is denied.
+- Keeps video calling dormant for now; the UI is audio-only.
 - Keeps the OpenAI API key server-side only.
 
 ## Tech Stack
@@ -24,7 +24,7 @@ The app is built for quick testing with another person over HTTPS using Cloudfla
 - TypeScript
 - Tailwind CSS 4
 - Socket.IO
-- WebRTC
+- WebRTC audio transport
 - Web Audio API
 - OpenAI API
 - Cloudflare Tunnel for public HTTPS testing
@@ -38,7 +38,7 @@ components/                Client UI and call experience
 lib/audioCapture.ts        Browser speech segmentation and WAV encoding
 lib/audioEnhancement.ts    Browser microphone filtering and soft noise gate
 lib/i18n.ts                English/Japanese UI strings and language helpers
-lib/invite.ts              Invite URL helper
+lib/roomCode.ts            Browser session storage helper for room codes
 lib/socket.ts              Socket.IO client
 lib/transcription.ts       Server-side OpenAI transcription
 lib/translation.ts         Server-side OpenAI translation
@@ -92,7 +92,7 @@ Open:
 http://localhost:3000
 ```
 
-Localhost works for browser camera/microphone testing. iPhone Safari and remote devices need HTTPS, so use the Cloudflare Tunnel flow below for real-device testing.
+Localhost works for browser microphone testing. iPhone Safari and remote devices need HTTPS, so use the Cloudflare Tunnel flow below for real-device testing.
 
 ## Environment Variables
 
@@ -121,7 +121,7 @@ Notes:
 
 ```bash
 npm run dev           # Start the custom Next.js + Socket.IO dev server
-npm run dev:public    # Start the app on port 3010 for Cloudflare Tunnel
+npm run start:public  # Start the production app on port 3010 for Cloudflare Tunnel
 npm run tunnel:setup  # Create/configure the Cloudflare Tunnel and DNS record
 npm run tunnel:run    # Run the Cloudflare Tunnel
 npm run lint          # Run ESLint
@@ -135,16 +135,32 @@ npm run build         # Build the Next.js app
 1. A user chooses English or Japanese and enters a display name.
 2. The creator calls `POST /api/rooms`.
 3. The server creates a 6-character room ID, 4-digit room code, and host-only creator cookie.
-4. The creator shares the invite link and 4-digit room code.
-5. The guest opens the invite link, chooses a language, enters a name, and enters the room code.
-6. Both users grant microphone/camera permissions.
+4. The creator shares the 4-digit room code.
+5. The guest opens the site, chooses a language, enters a name, and enters the 4-digit room code.
+6. Both users grant microphone permission and are added to the call.
 7. Socket.IO joins both participants into the room and exchanges WebRTC offer/answer/ICE signaling.
-8. WebRTC sends audio/video peer-to-peer where the network allows it.
+8. WebRTC sends audio peer-to-peer where the network allows it.
 9. The host starts the subtitle service.
 10. Each browser captures its own microphone audio, segments speech, and emits audio chunks to the server.
-11. The server transcribes the speaker's audio, translates it to the opposite language, sends the translated caption to the other participant, and sends a preview caption back to the speaker.
+11. The server transcribes the speaker's audio, renders captions in each viewer's selected language, and sends a preview caption back to the speaker.
 
 Remote audio is not transcribed. Each browser only submits its own local microphone audio.
+
+If the host leaves, the room ends and the remaining participant is removed from the call.
+
+## Video Calling Dormant Mode
+
+The app is intentionally scoped to audio-only UI right now. Video/WebRTC camera logic still exists in the codebase, but it is marked dormant behind `videoCallingEnabled` in `components/CallRoom.tsx`.
+
+If the user says **"enable video calling"**, that means:
+
+- Flip the dormant video path back on.
+- Restore camera permission copy and camera controls.
+- Re-enable camera track acquisition in the media setup flow.
+- Show local/remote video when tracks are present.
+- Keep the audio/subtitle behavior unchanged.
+
+Do not rebuild the feature from scratch; reuse the existing dormant video logic.
 
 ## Security And Privacy Notes
 
@@ -244,7 +260,8 @@ The script:
 Terminal 1:
 
 ```bash
-npm run dev:public
+npm run build
+npm run start:public
 ```
 
 Terminal 2:
@@ -267,7 +284,7 @@ You can also use the convenience script:
 ./run.sh
 ```
 
-`run.sh` starts the app on port `3010`, starts the tunnel, and stops both processes when you press `Ctrl+C`.
+`run.sh` builds the app, starts the production server on port `3010`, starts the tunnel, and stops both processes when you press `Ctrl+C`.
 
 ## Testing With Another Person
 
@@ -276,11 +293,13 @@ You can also use the convenience script:
 3. Choose `English` or `日本語`.
 4. Enter your name.
 5. Create a room.
-6. Send the other person the invite link and 4-digit room code.
-7. The other person opens the link, chooses their language, enters their name, enters the code, and joins.
-8. Both people allow microphone/camera.
+6. Send the other person the 4-digit room code.
+7. The other person opens the site, chooses their language, enters their name, and enters the code.
+8. Both people allow microphone access and join.
 9. The host starts the subtitle service.
 10. Speak naturally. The main subtitle area shows the other person's translated speech, and the preview subtitle area shows what your speech looks like after translation.
+
+If the host leaves, the other participant sees a `Call host has left` notice before returning to the home screen.
 
 If the WebRTC media connection fails on a restrictive network, test again on a different network. This MVP uses STUN only; production reliability usually requires TURN.
 
@@ -311,11 +330,11 @@ Plan for API usage before hosting this for real users.
 - Select English or Japanese.
 - Enter a display name.
 - Create a room.
-- Copy the invite link and 4-digit code.
+- Copy the 4-digit code.
 - Join from a second browser or device.
 - Confirm a third participant is blocked.
-- Confirm camera denial falls back to audio-only.
+- Confirm the UI asks only for microphone access.
 - Confirm microphone denial shows a localized error.
-- Confirm English speech becomes Japanese subtitles.
-- Confirm Japanese speech becomes English subtitles.
+- Confirm English viewers receive English subtitles.
+- Confirm Japanese viewers receive Japanese subtitles.
 - Confirm `npm run lint`, `npm run typecheck`, and `npm run build` pass.

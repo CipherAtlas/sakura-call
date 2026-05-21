@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Camera,
   CameraOff,
+  Copy,
   Flower2,
   LogOut,
   Mic,
@@ -13,7 +14,6 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LanguageGate } from "@/components/LanguageGate";
-import { RoomCodeModal } from "@/components/RoomCodeModal";
 import { CaptionEvent, SubtitlesPanel } from "@/components/SubtitlesPanel";
 import { UsernameGate } from "@/components/UsernameGate";
 import { VideoGrid } from "@/components/VideoGrid";
@@ -29,7 +29,7 @@ import {
   saveLanguage,
   t
 } from "@/lib/i18n";
-import { buildInviteUrl } from "@/lib/invite";
+import { getSavedRoomCodeForRoom } from "@/lib/roomCode";
 import { getSocket } from "@/lib/socket";
 import {
   addStreamTracks,
@@ -71,6 +71,10 @@ type StartSubtitleServiceResponse =
   | { ok: true }
   | { ok: false; reason: "HOST_ONLY" | "RATE_LIMITED" | "NOT_CONFIGURED" };
 
+type StopSubtitleServiceResponse =
+  | { ok: true }
+  | { ok: false; reason: "HOST_ONLY" | "RATE_LIMITED" };
+
 type CallState =
   | "idle"
   | "connecting"
@@ -79,7 +83,15 @@ type CallState =
   | "reconnecting"
   | "disconnected";
 
+type SubtitleNoticeKey =
+  | "subtitleServiceStartedNotice"
+  | "subtitleServiceStoppedNotice"
+  | "callHostLeftNotice";
+
 const captionLogLimit = 60;
+// Video calling is intentionally dormant for now. The WebRTC/video code remains
+// in place so "enable video calling" can re-enable it by flipping this path.
+const videoCallingEnabled = false;
 
 function getSessionParticipantId() {
   const key = "jec.participantId";
@@ -122,12 +134,12 @@ function hasLiveAudioTrack(stream: MediaStream | null): stream is MediaStream {
 
 function appendCaptionLog(log: CaptionEvent[], caption: CaptionEvent) {
   return [
-    caption,
     ...log.filter(
       (item) =>
         item.timestamp !== caption.timestamp || item.speakerId !== caption.speakerId
-    )
-  ].slice(0, captionLogLimit);
+    ),
+    caption
+  ].slice(-captionLogLimit);
 }
 
 export function CallRoom({ roomId }: { roomId: string }) {
@@ -144,6 +156,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const roomCodeRef = useRef("");
   const languageRef = useRef<Language>("en");
   const displayNameRef = useRef("");
+  const roomEndRedirectTimeoutRef = useRef<number | null>(null);
   const speakingMonitorRef = useRef<{
     analyser: AnalyserNode;
     audioContext: AudioContext;
@@ -157,11 +170,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [remoteDisplayName, setRemoteDisplayName] = useState("");
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [roomCode, setRoomCode] = useState("");
-  const [inviteUrl, setInviteUrl] = useState("");
   const [callState, setCallState] = useState<CallState>("idle");
   const [error, setError] = useState("");
   const [cameraError, setCameraError] = useState("");
-  const [copiedTarget, setCopiedTarget] = useState<"invite" | "code" | null>(null);
+  const [isCodeCopied, setIsCodeCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [startWithCameraOff, setStartWithCameraOff] = useState(false);
@@ -173,7 +185,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [isRoomHost, setIsRoomHost] = useState(false);
   const [isSubtitleServiceStarted, setIsSubtitleServiceStarted] = useState(false);
   const [isStartingSubtitleService, setIsStartingSubtitleService] = useState(false);
-  const [isSubtitleCaptureActive, setIsSubtitleCaptureActive] = useState(false);
   const [partialCaption, setPartialCaption] = useState<CaptionEvent | null>(null);
   const [finalCaption, setFinalCaption] = useState<CaptionEvent | null>(null);
   const [captionLog, setCaptionLog] = useState<CaptionEvent[]>([]);
@@ -182,6 +193,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [localFinalCaption, setLocalFinalCaption] =
     useState<CaptionEvent | null>(null);
   const [localCaptionLog, setLocalCaptionLog] = useState<CaptionEvent[]>([]);
+  const [subtitleNoticeId, setSubtitleNoticeId] = useState(0);
+  const [subtitleNoticeKey, setSubtitleNoticeKey] =
+    useState<SubtitleNoticeKey>("subtitleServiceStartedNotice");
+  const [showSubtitleNotice, setShowSubtitleNotice] = useState(false);
+
+  const showSubtitleServiceBanner = useCallback((noticeKey: SubtitleNoticeKey) => {
+    setSubtitleNoticeKey(noticeKey);
+    setSubtitleNoticeId((value) => value + 1);
+    setShowSubtitleNotice(true);
+  }, []);
 
   useEffect(() => {
     const savedLanguage = getSavedLanguage();
@@ -196,7 +217,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     displayNameRef.current = savedDisplayName;
 
     participantIdRef.current = getSessionParticipantId();
-    setInviteUrl(buildInviteUrl(roomId));
+    const savedRoomCode = getSavedRoomCodeForRoom(roomId);
+    setRoomCode(savedRoomCode);
+    roomCodeRef.current = savedRoomCode;
   }, [roomId]);
 
   useEffect(() => {
@@ -262,6 +285,18 @@ export function CallRoom({ roomId }: { roomId: string }) {
       }
     }
   }, [language, roomId, socket]);
+
+  useEffect(() => {
+    if (!showSubtitleNotice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setShowSubtitleNotice(false);
+    }, 5000);
+
+    return () => window.clearTimeout(timeout);
+  }, [showSubtitleNotice, subtitleNoticeId]);
 
   useEffect(() => {
     const localVideo = localVideoRef.current;
@@ -355,7 +390,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
   const startLocalSubtitleCapture = useCallback(async () => {
     if (audioCaptureRef.current) {
-      setIsSubtitleCaptureActive(true);
       return true;
     }
 
@@ -382,9 +416,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
       }
     });
     await audioCaptureRef.current.start();
-    setIsSubtitleCaptureActive(true);
     return true;
   }, [roomId, socket]);
+
+  const stopLocalSubtitleCapture = useCallback(() => {
+    audioCaptureRef.current?.stop();
+    audioCaptureRef.current = null;
+    setPartialCaption(null);
+    setLocalPartialCaption(null);
+  }, []);
 
   const stopLocalSpeakingMonitor = useCallback(() => {
     const monitor = speakingMonitorRef.current;
@@ -447,7 +487,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
         const rms = Math.sqrt(sum / samples.length);
 
-        if (rms > 0.035) {
+        if (rms > 0.025) {
           speakingFrames += 1;
           quietFrames = 0;
         } else {
@@ -459,7 +499,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           setSpeaking(true);
         }
 
-        if (quietFrames >= 12) {
+        if (quietFrames >= 20) {
           setSpeaking(false);
         }
 
@@ -499,7 +539,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     function handlePeerJoined(payload: { displayName?: string }) {
       setRemoteDisplayName(payload.displayName ?? "");
-      void createAndSendOffer();
       setCallState("connecting");
     }
 
@@ -555,18 +594,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     function handleCaptionError() {
-      setIsSubtitleCaptureActive(false);
       setError(t(languageRef.current, "subtitleServiceUnavailable"));
     }
 
     async function handleSubtitleServiceStarted() {
       setIsSubtitleServiceStarted(true);
+      showSubtitleServiceBanner("subtitleServiceStartedNotice");
       const started = await startLocalSubtitleCapture();
 
       if (!started) {
-        setIsSubtitleCaptureActive(false);
         setError(t(languageRef.current, "subtitleServiceUnavailable"));
       }
+    }
+
+    function handleSubtitleServiceStopped() {
+      setIsSubtitleServiceStarted(false);
+      showSubtitleServiceBanner("subtitleServiceStoppedNotice");
+      stopLocalSubtitleCapture();
     }
 
     function handlePeerLeft() {
@@ -579,6 +623,34 @@ export function CallRoom({ roomId }: { roomId: string }) {
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = null;
       }
+    }
+
+    function handleRoomEnded(payload?: { endedBy?: string }) {
+      stopLocalSubtitleCapture();
+      resetLocalMediaState();
+      closePeerConnection(peerConnectionRef.current);
+      peerConnectionRef.current = null;
+      remoteStreamRef.current = null;
+      setHasRemoteVideo(false);
+      setRemoteDisplayName("");
+      setCallState("disconnected");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = null;
+      }
+
+      if (payload?.endedBy === participantIdRef.current) {
+        router.push("/");
+        return;
+      }
+
+      showSubtitleServiceBanner("callHostLeftNotice");
+      if (roomEndRedirectTimeoutRef.current !== null) {
+        window.clearTimeout(roomEndRedirectTimeoutRef.current);
+      }
+      roomEndRedirectTimeoutRef.current = window.setTimeout(() => {
+        roomEndRedirectTimeoutRef.current = null;
+        router.push("/");
+      }, 5000);
     }
 
     function handleReconnectAttempt() {
@@ -599,7 +671,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           displayName: displayNameRef.current,
           spokenLanguage: languageRef.current
         },
-        (response: JoinResponse) => {
+        async (response: JoinResponse) => {
           if (!response.ok) {
             setError(errorForJoinReason(languageRef.current, response.reason));
             return;
@@ -610,6 +682,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
           setRemoteDisplayName(response.otherParticipants[0]?.displayName ?? "");
           if (response.subtitleServiceStarted) {
             void startLocalSubtitleCapture();
+          }
+          if (response.otherParticipants.length > 0) {
+            await createAndSendOffer();
           }
         }
       );
@@ -623,7 +698,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     socket.on("caption:preview", handleCaptionPreview);
     socket.on("caption:error", handleCaptionError);
     socket.on("subtitle:service-started", handleSubtitleServiceStarted);
+    socket.on("subtitle:service-stopped", handleSubtitleServiceStopped);
     socket.on("peer:left", handlePeerLeft);
+    socket.on("room:ended", handleRoomEnded);
     socket.io.on("reconnect_attempt", handleReconnectAttempt);
     socket.io.on("reconnect", handleReconnect);
 
@@ -636,7 +713,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
       socket.off("caption:preview", handleCaptionPreview);
       socket.off("caption:error", handleCaptionError);
       socket.off("subtitle:service-started", handleSubtitleServiceStarted);
+      socket.off("subtitle:service-stopped", handleSubtitleServiceStopped);
       socket.off("peer:left", handlePeerLeft);
+      socket.off("room:ended", handleRoomEnded);
       socket.io.off("reconnect_attempt", handleReconnectAttempt);
       socket.io.off("reconnect", handleReconnect);
     };
@@ -645,14 +724,21 @@ export function CallRoom({ roomId }: { roomId: string }) {
     createAndSendOffer,
     ensurePeerConnection,
     roomId,
+    router,
     socket,
-    startLocalSubtitleCapture
+    resetLocalMediaState,
+    showSubtitleServiceBanner,
+    startLocalSubtitleCapture,
+    stopLocalSubtitleCapture
   ]);
 
   useEffect(() => {
     return () => {
-      audioCaptureRef.current?.stop();
-      audioCaptureRef.current = null;
+      if (roomEndRedirectTimeoutRef.current !== null) {
+        window.clearTimeout(roomEndRedirectTimeoutRef.current);
+        roomEndRedirectTimeoutRef.current = null;
+      }
+      stopLocalSubtitleCapture();
       resetLocalMediaState();
       closePeerConnection(peerConnectionRef.current);
       if (socket.connected) {
@@ -662,7 +748,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         });
       }
     };
-  }, [resetLocalMediaState, roomId, socket]);
+  }, [resetLocalMediaState, roomId, socket, stopLocalSubtitleCapture]);
 
   async function requestMedia() {
     if (
@@ -704,7 +790,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       track.enabled = !isMuted;
     }
 
-    if (startWithCameraOff) {
+    if (!videoCallingEnabled || startWithCameraOff) {
       setIsCameraEnabled(false);
       setCameraError("");
     } else {
@@ -766,7 +852,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
-  async function handleJoinCall() {
+  async function handleJoinCall(preparedStream?: MediaStream) {
     if (!language || !roomInfo) {
       return;
     }
@@ -774,7 +860,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setError("");
     setCallState("connecting");
 
-    let stream = localStreamRef.current;
+    let stream = preparedStream ?? localStreamRef.current;
     if (!hasLiveAudioTrack(stream)) {
       try {
         stream = await requestMedia();
@@ -863,20 +949,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
     handleLeaveCall();
   }
 
-  async function handleCopyInvite() {
-    await navigator.clipboard.writeText(inviteUrl || buildInviteUrl(roomId));
-    setCopiedTarget("invite");
-    window.setTimeout(() => setCopiedTarget(null), 1600);
-  }
-
   async function handleCopyCode() {
     if (!roomInfo?.roomCode) {
       return;
     }
 
     await navigator.clipboard.writeText(roomInfo.roomCode);
-    setCopiedTarget("code");
-    window.setTimeout(() => setCopiedTarget(null), 1600);
+    setIsCodeCopied(true);
+    window.setTimeout(() => setIsCodeCopied(false), 1600);
   }
 
   function handleToggleMute() {
@@ -930,8 +1010,28 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
-  function handleStartSubtitleService() {
-    if (!isRoomHost || isSubtitleServiceStarted || isStartingSubtitleService) {
+  function handleToggleSubtitleService() {
+    if (!isRoomHost || isStartingSubtitleService) {
+      return;
+    }
+
+    if (isSubtitleServiceStarted) {
+      socket.emit(
+        "subtitle:stop-service",
+        {
+          roomId,
+          participantId: participantIdRef.current
+        },
+        (response: StopSubtitleServiceResponse) => {
+          if (!response.ok) {
+            setError(t(languageRef.current, "subtitleServiceUnavailable"));
+            return;
+          }
+
+          setIsSubtitleServiceStarted(false);
+          stopLocalSubtitleCapture();
+        }
+      );
       return;
     }
 
@@ -954,7 +1054,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
         const started = await startLocalSubtitleCapture();
 
         if (!started) {
-          setIsSubtitleCaptureActive(false);
           setError(t(languageRef.current, "subtitleServiceUnavailable"));
         }
       }
@@ -962,9 +1061,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   function handleLeaveCall() {
-    audioCaptureRef.current?.stop();
-    audioCaptureRef.current = null;
-    setIsSubtitleCaptureActive(false);
+    if (roomEndRedirectTimeoutRef.current !== null) {
+      window.clearTimeout(roomEndRedirectTimeoutRef.current);
+      roomEndRedirectTimeoutRef.current = null;
+    }
+    stopLocalSubtitleCapture();
     resetLocalMediaState();
     closePeerConnection(peerConnectionRef.current);
     peerConnectionRef.current = null;
@@ -1000,8 +1101,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return t(language, "disconnected");
     }
 
-    return t(language, "roomSetup");
-  }, [callState, language]);
+    return roomInfo?.isCreator ? t(language, "roomSetup") : t(language, "joinCall");
+  }, [callState, language, roomInfo?.isCreator]);
 
   const canEnterRoom =
     Boolean(language && roomInfo) &&
@@ -1011,33 +1112,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const canJoin =
     callState === "idle" && canEnterRoom && isMediaReady && !isPreparingMedia;
   const isCameraOnForControls = isMediaReady ? isCameraEnabled : !startWithCameraOff;
-  const showRoomSetup = callState === "idle" || Boolean(roomInfo?.isCreator);
-  const showSubtitlePreview =
-    callState !== "idle" && (isSubtitleServiceStarted || isSubtitleCaptureActive);
-  const subtitleStatusText = useMemo(() => {
-    if (!language) {
-      return "";
-    }
-
-    if (isStartingSubtitleService) {
-      return t(language, "subtitleServiceStarting");
-    }
-
-    if (isSubtitleCaptureActive) {
-      return t(language, "subtitleServiceOn");
-    }
-
-    if (isSubtitleServiceStarted) {
-      return t(language, "subtitleServiceStarting");
-    }
-
-    return t(language, "subtitleServiceWaiting");
-  }, [
-    isStartingSubtitleService,
-    isSubtitleCaptureActive,
-    isSubtitleServiceStarted,
-    language
-  ]);
+  const hostRoomCode = roomInfo?.isCreator ? roomInfo.roomCode : undefined;
   const remoteParticipantStatus = useMemo(() => {
     if (!language) {
       return "";
@@ -1073,25 +1148,52 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   return (
-    <main className="garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8">
+    <main
+      className={`garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8 ${
+        callState === "idle" ? "" : "pb-24"
+      }`}
+    >
+      {showSubtitleNotice && language ? (
+        <div className="pointer-events-none fixed inset-x-0 top-0 z-40 px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-6 lg:px-8">
+          <div
+            key={subtitleNoticeId}
+            className="subtitle-service-toast garden-panel mx-auto max-w-md overflow-hidden"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-3 px-4 py-3">
+              <span className="garden-bubble grid h-9 w-9 shrink-0 place-items-center rounded-full">
+                <Flower2 className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <p className="garden-text-ink text-sm font-black">
+                {t(language, subtitleNoticeKey)}
+              </p>
+            </div>
+            <span className="subtitle-service-toast-bar" aria-hidden="true" />
+          </div>
+        </div>
+      ) : null}
+
       <div
-        className={`mx-auto grid w-full gap-4 ${
+        className={`mx-auto grid w-full gap-3 overflow-hidden ${
+          callState === "idle" ? "max-w-xl" : "max-w-5xl"
+        } ${
           callState === "idle"
-            ? "max-w-xl"
-            : "max-w-7xl lg:grid-cols-[minmax(0,1fr)_18rem]"
+            ? "max-h-[calc(100dvh-2rem)]"
+            : "call-shell-active max-h-[calc(100dvh-7rem)]"
         }`}
       >
         <section
-          className={`grid min-w-0 gap-4 ${
-            callState === "idle" ? "" : "content-start lg:min-h-[calc(100dvh-2rem)]"
+          className={`grid min-h-0 min-w-0 gap-3 ${
+            callState === "idle" ? "" : "call-active-layout"
           }`}
         >
           <header
-            className={`garden-panel flex items-center justify-between gap-4 ${
+            className={`garden-panel flex flex-wrap items-center justify-between gap-3 ${
               callState === "idle" ? "p-4 sm:p-5" : "p-3 sm:p-4"
             }`}
           >
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="garden-kicker flex items-center gap-2">
                 <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
                 {t(language, "appName")}
@@ -1104,15 +1206,35 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 {statusText}
               </p>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                aria-label={t(language, "back")}
-                onClick={handleBackToHome}
-                className="garden-icon-button grid h-12 w-12 place-items-center rounded-full"
-              >
-                <ArrowLeft className="h-5 w-5" aria-hidden="true" />
-              </button>
+            <div
+              className={`flex min-w-0 shrink-0 items-center gap-2 ${
+                hostRoomCode ? "max-sm:w-full" : ""
+              }`}
+            >
+              {hostRoomCode ? (
+                <button
+                  type="button"
+                  aria-label={isCodeCopied ? t(language, "copied") : t(language, "copyRoomCode")}
+                  title={isCodeCopied ? t(language, "copied") : t(language, "copyRoomCode")}
+                  onClick={handleCopyCode}
+                  className="garden-button garden-button-quiet h-12 min-w-0 flex-1 gap-2 px-4 text-sm sm:flex-none sm:text-base"
+                >
+                  <Copy className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="truncate whitespace-nowrap font-black">
+                    Room Code: {hostRoomCode}
+                  </span>
+                </button>
+              ) : null}
+              {callState === "idle" ? (
+                <button
+                  type="button"
+                  aria-label={t(language, "back")}
+                  onClick={handleBackToHome}
+                  className="garden-icon-button grid h-12 w-12 place-items-center rounded-full"
+                >
+                  <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 aria-label={
@@ -1154,26 +1276,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
           {callState === "idle" ? (
             <>
-              <RoomCodeModal
-                language={language}
-                roomCode={roomInfo?.roomCode}
-                inviteUrl={inviteUrl}
-                codeValue={roomCode}
-                isCreator={Boolean(roomInfo?.isCreator)}
-                copiedTarget={copiedTarget}
-                onCodeChange={setRoomCode}
-                onCopyInvite={handleCopyInvite}
-                onCopyCode={handleCopyCode}
-              />
-
               <section className="garden-panel p-4 sm:p-5">
                 <div className="flex items-start gap-3">
                   <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-                    {isMediaReady ? (
-                      <Camera className="h-5 w-5" aria-hidden="true" />
-                    ) : (
-                      <Mic className="h-5 w-5" aria-hidden="true" />
-                    )}
+                    <Mic className="h-5 w-5" aria-hidden="true" />
                   </div>
                   <div className="min-w-0">
                     <h2 className="garden-text-ink text-lg font-black">
@@ -1192,11 +1298,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   disabled={!canPrepareMedia}
                   className="garden-button garden-button-secondary mt-4 h-14 w-full gap-2 px-5 text-base"
                 >
-                  {isMediaReady ? (
-                    <Camera className="h-5 w-5" aria-hidden="true" />
-                  ) : (
-                    <Mic className="h-5 w-5" aria-hidden="true" />
-                  )}
+                  <Mic className="h-5 w-5" aria-hidden="true" />
                   {isPreparingMedia
                     ? t(language, "preparingPermissions")
                     : isMediaReady
@@ -1207,7 +1309,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   <p className="garden-text-muted text-sm font-black">
                     {t(language, "mediaStartOptions")}
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3">
                     <button
                       type="button"
                       onClick={handleToggleMute}
@@ -1221,21 +1323,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
                       )}
                       {isMuted ? t(language, "startMuted") : t(language, "startUnmuted")}
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleToggleCamera}
-                      disabled={isPreparingMedia}
-                      className="garden-button garden-button-quiet h-14 gap-2 px-3 text-sm sm:text-base"
-                    >
-                      {isCameraOnForControls ? (
-                        <Camera className="h-5 w-5" aria-hidden="true" />
-                      ) : (
-                        <CameraOff className="h-5 w-5" aria-hidden="true" />
-                      )}
-                      {isCameraOnForControls
-                        ? t(language, "startCameraOn")
-                        : t(language, "startCameraOff")}
-                    </button>
+                    {videoCallingEnabled ? (
+                      <button
+                        type="button"
+                        onClick={handleToggleCamera}
+                        disabled={isPreparingMedia}
+                        className="garden-button garden-button-quiet h-14 gap-2 px-3 text-sm sm:text-base"
+                      >
+                        {isCameraOnForControls ? (
+                          <Camera className="h-5 w-5" aria-hidden="true" />
+                        ) : (
+                          <CameraOff className="h-5 w-5" aria-hidden="true" />
+                        )}
+                        {isCameraOnForControls
+                          ? t(language, "startCameraOn")
+                          : t(language, "startCameraOff")}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </section>
@@ -1255,19 +1359,21 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 </div>
               ) : null}
 
-              <section
-                aria-label={t(language, "callControls")}
-                className="garden-panel p-3"
-              >
-                <button
-                  type="button"
-                  disabled={!canJoin}
-                  onClick={handleJoinCall}
-                  className="garden-button garden-button-primary h-16 w-full px-5 text-xl"
+              {isMediaReady ? (
+                <section
+                  aria-label={t(language, "callControls")}
+                  className="garden-panel p-3"
                 >
-                  {t(language, "joinCall")}
-                </button>
-              </section>
+                  <button
+                    type="button"
+                    disabled={!canJoin}
+                    onClick={() => void handleJoinCall()}
+                    className="garden-button garden-button-primary h-16 w-full px-5 text-xl"
+                  >
+                    {t(language, "joinCall")}
+                  </button>
+                </section>
+              ) : null}
             </>
           ) : (
             <>
@@ -1275,20 +1381,75 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 language={language}
                 localVideoRef={localVideoRef}
                 remoteVideoRef={remoteVideoRef}
-                hasLocalVideo={isCameraEnabled}
-                hasRemoteVideo={hasRemoteVideo}
+                hasLocalVideo={videoCallingEnabled && isCameraEnabled}
+                hasRemoteVideo={videoCallingEnabled && hasRemoteVideo}
                 isLocalSpeaking={isLocalSpeaking}
                 localName={displayName}
+                localAction={
+                  <button
+                    type="button"
+                    onClick={handleToggleMute}
+                    className="garden-button garden-button-quiet h-11 gap-2 px-3 text-sm"
+                  >
+                    {isMuted ? (
+                      <MicOff className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Mic className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    <span className="font-black">
+                      {isMuted ? t(language, "unmute") : t(language, "mute")}
+                    </span>
+                  </button>
+                }
+                hasRemoteParticipant={Boolean(remoteDisplayName)}
                 remoteName={remoteDisplayName || t(language, "remoteVideo")}
                 remoteStatus={remoteParticipantStatus}
               />
 
-              <SubtitlesPanel
-                language={language}
-                partialCaption={partialCaption}
-                finalCaption={finalCaption}
-                captionLog={captionLog}
-              />
+              {isRoomHost ? (
+                <section
+                  aria-label={t(language, "callControls")}
+                  className="garden-panel grid gap-2 p-2 sm:p-3"
+                >
+                  <button
+                    type="button"
+                    onClick={handleToggleSubtitleService}
+                    disabled={isStartingSubtitleService}
+                    className={`garden-button h-12 px-4 text-base ${
+                      isSubtitleServiceStarted
+                        ? "garden-button-danger"
+                        : "garden-button-primary"
+                    }`}
+                  >
+                    {isStartingSubtitleService
+                      ? t(language, "subtitleServiceStarting")
+                      : isSubtitleServiceStarted
+                        ? t(language, "stopSubtitleService")
+                        : t(language, "startSubtitleService")}
+                  </button>
+                </section>
+              ) : null}
+
+              <section className="garden-panel subtitle-focus-card grid min-h-0 gap-3 p-3 sm:p-4">
+                <SubtitlesPanel
+                  language={language}
+                  partialCaption={partialCaption}
+                  finalCaption={finalCaption}
+                  captionLog={captionLog}
+                  embedded
+                />
+
+                <SubtitlesPanel
+                  language={language}
+                  title={t(language, "subtitlePreview")}
+                  emptyText={t(language, "noSubtitlePreviewYet")}
+                  partialCaption={localPartialCaption}
+                  finalCaption={localFinalCaption}
+                  captionLog={localCaptionLog}
+                  isPreview
+                  embedded
+                />
+              </section>
 
               {error || cameraError ? (
                 <div className="grid gap-2">
@@ -1305,94 +1466,47 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 </div>
               ) : null}
 
-              <section
-                aria-label={t(language, "callControls")}
-                className="garden-panel grid grid-cols-2 gap-3 p-3"
-              >
-                {isRoomHost && !isSubtitleServiceStarted ? (
+              {videoCallingEnabled ? (
+                <section
+                  aria-label={t(language, "callControls")}
+                  className="garden-panel grid grid-cols-2 gap-3 p-3"
+                >
                   <button
                     type="button"
-                    onClick={handleStartSubtitleService}
-                    disabled={isStartingSubtitleService}
-                    className="garden-button garden-button-primary col-span-2 h-14 px-5 text-lg"
+                    onClick={handleToggleCamera}
+                    className="garden-button garden-button-quiet h-14 gap-2 px-4 text-base"
                   >
-                    {t(language, "startSubtitleService")}
+                    {isCameraEnabled ? (
+                      <Camera className="h-5 w-5" aria-hidden="true" />
+                    ) : (
+                      <CameraOff className="h-5 w-5" aria-hidden="true" />
+                    )}
+                    {isCameraEnabled
+                      ? t(language, "cameraOn")
+                      : t(language, "cameraOff")}
                   </button>
-                ) : null}
-                {isSubtitleServiceStarted || isStartingSubtitleService ? (
-                  <p className="garden-status-soft col-span-2 rounded-lg px-4 py-3 text-center text-sm font-black">
-                    {subtitleStatusText}
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={handleToggleMute}
-                  className="garden-button garden-button-quiet h-14 gap-2 px-4 text-base"
-                >
-                  {isMuted ? (
-                    <MicOff className="h-5 w-5" aria-hidden="true" />
-                  ) : (
-                    <Mic className="h-5 w-5" aria-hidden="true" />
-                  )}
-                  {isMuted ? t(language, "unmute") : t(language, "mute")}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleToggleCamera}
-                  className="garden-button garden-button-quiet h-14 gap-2 px-4 text-base"
-                >
-                  {isCameraEnabled ? (
-                    <Camera className="h-5 w-5" aria-hidden="true" />
-                  ) : (
-                    <CameraOff className="h-5 w-5" aria-hidden="true" />
-                  )}
-                  {isCameraEnabled
-                    ? t(language, "cameraOn")
-                    : t(language, "cameraOff")}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLeaveCall}
-                  className="garden-button garden-button-danger col-span-2 h-14 gap-2 px-5 text-lg"
-                >
-                  <LogOut className="h-5 w-5" aria-hidden="true" />
-                  {t(language, "leaveCall")}
-                </button>
-              </section>
+                </section>
+              ) : null}
             </>
           )}
         </section>
 
-        {callState !== "idle" && (showRoomSetup || showSubtitlePreview) ? (
-          <aside className="order-last grid gap-4 lg:order-none lg:sticky lg:top-4 lg:self-start">
-            {showRoomSetup ? (
-              <RoomCodeModal
-                language={language}
-                roomCode={roomInfo?.roomCode}
-                inviteUrl={inviteUrl}
-                codeValue={roomCode}
-                isCreator={Boolean(roomInfo?.isCreator)}
-                copiedTarget={copiedTarget}
-                onCodeChange={setRoomCode}
-                onCopyInvite={handleCopyInvite}
-                onCopyCode={handleCopyCode}
-              />
-            ) : null}
-            {showSubtitlePreview ? (
-              <SubtitlesPanel
-                language={language}
-                title={t(language, "subtitlePreview")}
-                emptyText={t(language, "noSubtitlePreviewYet")}
-                partialCaption={localPartialCaption}
-                finalCaption={localFinalCaption}
-                captionLog={localCaptionLog}
-                isPreview
-                showOriginalText
-              />
-            ) : null}
-          </aside>
-        ) : null}
       </div>
+
+      {callState !== "idle" ? (
+        <div className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-5xl">
+            <button
+              type="button"
+              onClick={handleLeaveCall}
+              className="garden-button garden-leave-bar h-14 w-full gap-2 px-5 text-lg"
+            >
+              <LogOut className="h-5 w-5" aria-hidden="true" />
+              {t(language, "leaveCall")}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

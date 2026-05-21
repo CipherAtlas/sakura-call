@@ -1,6 +1,7 @@
 "use client";
 
 import { Captions, Sparkles } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { Language } from "@/lib/i18n";
 import { t } from "@/lib/i18n";
 
@@ -15,6 +16,13 @@ export type CaptionEvent = {
   timestamp: number;
 };
 
+function formatCaptionTime(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(timestamp));
+}
+
 export function SubtitlesPanel({
   language,
   partialCaption,
@@ -23,7 +31,7 @@ export function SubtitlesPanel({
   emptyText,
   captionLog = [],
   isPreview = false,
-  showOriginalText = false
+  embedded = false
 }: {
   language: Language;
   partialCaption: CaptionEvent | null;
@@ -32,21 +40,32 @@ export function SubtitlesPanel({
   emptyText?: string;
   captionLog?: CaptionEvent[];
   isPreview?: boolean;
-  showOriginalText?: boolean;
+  embedded?: boolean;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const activeCaption = partialCaption ?? finalCaption;
-  const shouldShowOriginalText = showOriginalText && Boolean(activeCaption?.originalText);
-  const captionClassName = isPreview
-    ? "subtitle-text min-h-20 text-balance text-xl font-black leading-tight tracking-normal"
-    : "subtitle-text min-h-[min(38dvh,18rem)] text-balance text-2xl font-black leading-tight tracking-normal sm:text-3xl lg:text-4xl";
+  const liveCaptions =
+    partialCaption && !captionLog.some((caption) => caption.timestamp === partialCaption.timestamp)
+      ? [...captionLog, partialCaption]
+      : captionLog;
+
+  useEffect(() => {
+    const element = scrollRef.current;
+
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [liveCaptions.length, activeCaption?.translatedText]);
 
   return (
     <section
-      className={`garden-panel subtitle-panel p-4 sm:p-5 ${
+      className={`subtitle-panel grid min-h-0 ${
+        embedded ? "subtitle-panel-embedded" : "garden-panel p-4 sm:p-5"
+      } ${
         isPreview ? "garden-preview-panel" : ""
       }`}
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex items-center justify-between gap-3 self-start">
         <h2 className="garden-text-ink flex items-center gap-2 text-base font-black">
           <Captions className="garden-icon-blush h-5 w-5" aria-hidden="true" />
           {title ?? t(language, "subtitles")}
@@ -63,45 +82,49 @@ export function SubtitlesPanel({
           <Sparkles className="garden-icon-blush h-5 w-5" aria-hidden="true" />
         )}
       </div>
-      <p aria-live="polite" className={captionClassName}>
-        {activeCaption?.translatedText ||
-          emptyText ||
-          t(language, "noSubtitlesYet")}
-      </p>
-      {shouldShowOriginalText ? (
-        <div className="mt-3 rounded-lg bg-white/45 p-3 ring-1 ring-white/60">
-          <p className="garden-text-muted text-xs font-black uppercase">
-            {t(language, "debugOriginalTranscript")}
-          </p>
-          <p className="garden-text-ink mt-1 text-sm font-bold leading-snug">
-            {activeCaption?.originalText}
-          </p>
-        </div>
-      ) : null}
-      {captionLog.length > 0 ? (
-        <div className="subtitle-log mt-4">
-          <p className="garden-text-muted mb-2 text-xs font-black uppercase">
-            {t(language, "captionHistory")}
-          </p>
-          <div className="subtitle-log-scroll grid gap-2" tabIndex={0}>
-            {captionLog.map((caption) => (
+      <div
+        ref={scrollRef}
+        aria-live="polite"
+        className={`subtitle-chat-scroll grid content-end gap-2 ${
+          isPreview ? "is-preview" : ""
+        }`}
+        tabIndex={0}
+      >
+        {liveCaptions.length > 0 ? (
+          liveCaptions.map((caption) => {
+            const isActive = activeCaption?.timestamp === caption.timestamp;
+
+            return (
               <article
                 key={`${caption.timestamp}-${caption.speakerId}`}
-                className="subtitle-log-entry rounded-lg p-3"
+                className={`subtitle-chat-message rounded-lg p-3 ${
+                  isActive ? "is-active" : ""
+                }`}
               >
-                <p className="garden-text-ink text-sm font-black leading-snug">
+                <p
+                  className="subtitle-text text-balance text-base font-black leading-tight tracking-normal sm:text-lg"
+                >
                   {caption.translatedText}
                 </p>
-                {showOriginalText ? (
-                  <p className="garden-text-muted mt-1 text-xs font-bold leading-snug">
-                    {caption.originalText}
-                  </p>
-                ) : null}
+                <time
+                  className="subtitle-message-time"
+                  dateTime={new Date(caption.timestamp).toISOString()}
+                >
+                  {formatCaptionTime(caption.timestamp)}
+                </time>
               </article>
-            ))}
-          </div>
-        </div>
-      ) : null}
+            );
+          })
+        ) : (
+          <p
+            className={`garden-muted text-center text-sm font-black ${
+              embedded ? "py-3" : "py-8"
+            }`}
+          >
+            {emptyText || t(language, "noSubtitlesYet")}
+          </p>
+        )}
+      </div>
     </section>
   );
 }
