@@ -12,11 +12,12 @@ export function VideoGrid({
   hasLocalVideo,
   hasRemoteVideo,
   isLocalSpeaking,
+  isRemoteSpeaking,
   localName,
   localAction,
   hasRemoteParticipant,
   remoteName,
-  remoteStatus
+  remoteStatus,
 }: {
   language: Language;
   localVideoRef: RefObject<HTMLVideoElement | null>;
@@ -24,6 +25,7 @@ export function VideoGrid({
   hasLocalVideo: boolean;
   hasRemoteVideo: boolean;
   isLocalSpeaking: boolean;
+  isRemoteSpeaking: boolean;
   localName: string;
   localAction?: ReactNode;
   hasRemoteParticipant: boolean;
@@ -69,8 +71,14 @@ export function VideoGrid({
       </article>
 
       {hasRemoteParticipant ? (
-        <article className="audio-card">
-          <div className="audio-avatar">
+        <article
+          className={`audio-card ${isRemoteSpeaking ? "is-speaking" : ""}`}
+        >
+          <div
+            className={`audio-avatar speaking-avatar ${
+              isRemoteSpeaking ? "is-speaking" : ""
+            }`}
+          >
             <video
               ref={remoteVideoRef}
               autoPlay
@@ -83,11 +91,19 @@ export function VideoGrid({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                  isRemoteSpeaking ? "speaking-dot" : "garden-neutral-dot"
+                }`}
+              />
               <p className="garden-text-ink truncate text-base font-black">
                 {remoteName}
               </p>
             </div>
-            <p className="garden-text-muted mt-1 text-sm font-bold">{remoteStatus}</p>
+            <p className="garden-text-muted mt-1 text-sm font-bold">
+              {remoteStatus}
+            </p>
           </div>
         </article>
       ) : (

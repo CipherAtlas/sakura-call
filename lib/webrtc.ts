@@ -1,22 +1,44 @@
 "use client";
 
-function parseIceUrls(value: string | undefined): RTCIceServer[] {
-  if (!value) {
-    return [{ urls: "stun:stun.l.google.com:19302" }];
-  }
+const defaultStunUrls = ["stun:stun.l.google.com:19302"];
 
-  const urls = value
-    .split(",")
+function parseUrlList(value: string | undefined) {
+  return value
+    ?.split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
 
-  return urls.length > 0 ? [{ urls }] : [{ urls: "stun:stun.l.google.com:19302" }];
+function parseIceServers(): RTCIceServer[] {
+  const stunUrls = parseUrlList(process.env.NEXT_PUBLIC_STUN_URLS);
+  const turnUrls = parseUrlList(process.env.NEXT_PUBLIC_TURN_URLS);
+  const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME;
+  const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+  const iceServers: RTCIceServer[] = [
+    { urls: stunUrls && stunUrls.length > 0 ? stunUrls : defaultStunUrls }
+  ];
+
+  if (turnUrls && turnUrls.length > 0 && turnUsername && turnCredential) {
+    iceServers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnCredential
+    });
+  }
+
+  return iceServers;
+}
+
+function parseIceTransportPolicy(value: string | undefined): RTCIceTransportPolicy {
+  return value === "relay" ? "relay" : "all";
 }
 
 export function createPeerConnection(): RTCPeerConnection {
   return new RTCPeerConnection({
-    iceServers: parseIceUrls(process.env.NEXT_PUBLIC_STUN_URLS),
-    iceTransportPolicy: "all"
+    iceServers: parseIceServers(),
+    iceTransportPolicy: parseIceTransportPolicy(
+      process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY
+    )
   });
 }
 

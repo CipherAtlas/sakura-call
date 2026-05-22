@@ -9,10 +9,19 @@ import {
   LogOut,
   Mic,
   MicOff,
-  Settings
+  Settings,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Dispatch,
+  MutableRefObject,
+  SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { LanguageGate } from "@/components/LanguageGate";
 import { CaptionEvent, SubtitlesPanel } from "@/components/SubtitlesPanel";
 import { UsernameGate } from "@/components/UsernameGate";
@@ -27,14 +36,14 @@ import {
   languageLabel,
   saveDisplayName,
   saveLanguage,
-  t
+  t,
 } from "@/lib/i18n";
 import { getSavedRoomCodeForRoom } from "@/lib/roomCode";
 import { getSocket } from "@/lib/socket";
 import {
   addStreamTracks,
   closePeerConnection,
-  createPeerConnection
+  createPeerConnection,
 } from "@/lib/webrtc";
 
 type RoomInfo = {
@@ -66,6 +75,130 @@ type JoinResponse =
     };
 
 type JoinFailureReason = Extract<JoinResponse, { ok: false }>["reason"];
+
+type SpeakingMonitor = {
+  analyser: AnalyserNode;
+  audioContext: AudioContext;
+  frameId: number;
+  source: MediaStreamAudioSourceNode;
+};
+
+function stopSpeakingMonitor(
+  monitorRef: MutableRefObject<SpeakingMonitor | null>,
+  speakingRef: MutableRefObject<boolean>,
+  setSpeaking: Dispatch<SetStateAction<boolean>>,
+) {
+  const monitor = monitorRef.current;
+
+  if (monitor) {
+    window.cancelAnimationFrame(monitor.frameId);
+    monitor.source.disconnect();
+    monitor.analyser.disconnect();
+    void monitor.audioContext.close().catch(() => undefined);
+    monitorRef.current = null;
+  }
+
+  speakingRef.current = false;
+  setSpeaking(false);
+}
+
+function startSpeakingMonitor({
+  monitorRef,
+  quietFramesToStop = 20,
+  setSpeaking,
+  speakingRef,
+  stream,
+  threshold = 0.025,
+}: {
+  monitorRef: MutableRefObject<SpeakingMonitor | null>;
+  quietFramesToStop?: number;
+  setSpeaking: Dispatch<SetStateAction<boolean>>;
+  speakingRef: MutableRefObject<boolean>;
+  stream: MediaStream;
+  threshold?: number;
+}) {
+  stopSpeakingMonitor(monitorRef, speakingRef, setSpeaking);
+
+  const AudioContextConstructor =
+    window.AudioContext ??
+    (
+      window as typeof window & {
+        webkitAudioContext?: typeof AudioContext;
+      }
+    ).webkitAudioContext;
+  const audioTracks = stream
+    .getAudioTracks()
+    .filter((track) => track.readyState === "live");
+
+  if (!AudioContextConstructor || audioTracks.length === 0) {
+    return;
+  }
+
+  const audioContext = new AudioContextConstructor();
+  const analyser = audioContext.createAnalyser();
+  const source = audioContext.createMediaStreamSource(
+    new MediaStream(audioTracks),
+  );
+  let speakingFrames = 0;
+  let quietFrames = 0;
+
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.72;
+  const samples = new Uint8Array(analyser.fftSize);
+  source.connect(analyser);
+  void audioContext.resume().catch(() => undefined);
+
+  function setNextSpeaking(nextValue: boolean) {
+    if (speakingRef.current === nextValue) {
+      return;
+    }
+
+    speakingRef.current = nextValue;
+    setSpeaking(nextValue);
+  }
+
+  const monitor: SpeakingMonitor = {
+    analyser,
+    audioContext,
+    frameId: 0,
+    source,
+  };
+
+  function tick() {
+    analyser.getByteTimeDomainData(samples);
+
+    let sum = 0;
+    for (const sample of samples) {
+      const centered = (sample - 128) / 128;
+      sum += centered * centered;
+    }
+
+    const rms = Math.sqrt(sum / samples.length);
+
+    if (rms > threshold) {
+      speakingFrames += 1;
+      quietFrames = 0;
+    } else {
+      quietFrames += 1;
+      speakingFrames = 0;
+    }
+
+    if (speakingFrames >= 2) {
+      setNextSpeaking(true);
+    }
+
+    if (quietFrames >= quietFramesToStop) {
+      setNextSpeaking(false);
+    }
+
+    if (monitorRef.current === monitor) {
+      monitor.frameId = window.requestAnimationFrame(tick);
+    }
+  }
+
+  monitorRef.current = monitor;
+  monitor.frameId = window.requestAnimationFrame(tick);
+}
 
 type StartSubtitleServiceResponse =
   | { ok: true }
@@ -128,7 +261,8 @@ function errorForJoinReason(language: Language, reason: JoinFailureReason) {
 
 function hasLiveAudioTrack(stream: MediaStream | null): stream is MediaStream {
   return (
-    stream?.getAudioTracks().some((track) => track.readyState === "live") ?? false
+    stream?.getAudioTracks().some((track) => track.readyState === "live") ??
+    false
   );
 }
 
@@ -136,9 +270,10 @@ function appendCaptionLog(log: CaptionEvent[], caption: CaptionEvent) {
   return [
     ...log.filter(
       (item) =>
-        item.timestamp !== caption.timestamp || item.speakerId !== caption.speakerId
+        item.timestamp !== caption.timestamp ||
+        item.speakerId !== caption.speakerId,
     ),
-    caption
+    caption,
   ].slice(-captionLogLimit);
 }
 
@@ -152,18 +287,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const audioEnhancementStopRef = useRef<(() => void) | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const participantIdRef = useRef<string>("");
   const roomCodeRef = useRef("");
   const languageRef = useRef<Language>("en");
   const displayNameRef = useRef("");
   const roomEndRedirectTimeoutRef = useRef<number | null>(null);
-  const speakingMonitorRef = useRef<{
-    analyser: AnalyserNode;
-    audioContext: AudioContext;
-    frameId: number;
-    source: MediaStreamAudioSourceNode;
-  } | null>(null);
+  const speakingMonitorRef = useRef<SpeakingMonitor | null>(null);
+  const remoteSpeakingMonitorRef = useRef<SpeakingMonitor | null>(null);
   const isLocalSpeakingRef = useRef(false);
+  const isRemoteSpeakingRef = useRef(false);
 
   const [language, setLanguage] = useState<Language | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -180,12 +313,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+  const [isRemoteSpeaking, setIsRemoteSpeaking] = useState(false);
   const [isCameraEnabled, setIsCameraEnabled] = useState(false);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   const [isRoomHost, setIsRoomHost] = useState(false);
-  const [isSubtitleServiceStarted, setIsSubtitleServiceStarted] = useState(false);
-  const [isStartingSubtitleService, setIsStartingSubtitleService] = useState(false);
-  const [partialCaption, setPartialCaption] = useState<CaptionEvent | null>(null);
+  const [isSubtitleServiceStarted, setIsSubtitleServiceStarted] =
+    useState(false);
+  const [isStartingSubtitleService, setIsStartingSubtitleService] =
+    useState(false);
+  const [partialCaption, setPartialCaption] = useState<CaptionEvent | null>(
+    null,
+  );
   const [finalCaption, setFinalCaption] = useState<CaptionEvent | null>(null);
   const [captionLog, setCaptionLog] = useState<CaptionEvent[]>([]);
   const [localPartialCaption, setLocalPartialCaption] =
@@ -194,15 +332,19 @@ export function CallRoom({ roomId }: { roomId: string }) {
     useState<CaptionEvent | null>(null);
   const [localCaptionLog, setLocalCaptionLog] = useState<CaptionEvent[]>([]);
   const [subtitleNoticeId, setSubtitleNoticeId] = useState(0);
-  const [subtitleNoticeKey, setSubtitleNoticeKey] =
-    useState<SubtitleNoticeKey>("subtitleServiceStartedNotice");
+  const [subtitleNoticeKey, setSubtitleNoticeKey] = useState<SubtitleNoticeKey>(
+    "subtitleServiceStartedNotice",
+  );
   const [showSubtitleNotice, setShowSubtitleNotice] = useState(false);
 
-  const showSubtitleServiceBanner = useCallback((noticeKey: SubtitleNoticeKey) => {
-    setSubtitleNoticeKey(noticeKey);
-    setSubtitleNoticeId((value) => value + 1);
-    setShowSubtitleNotice(true);
-  }, []);
+  const showSubtitleServiceBanner = useCallback(
+    (noticeKey: SubtitleNoticeKey) => {
+      setSubtitleNoticeKey(noticeKey);
+      setSubtitleNoticeId((value) => value + 1);
+      setShowSubtitleNotice(true);
+    },
+    [],
+  );
 
   useEffect(() => {
     const savedLanguage = getSavedLanguage();
@@ -233,7 +375,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     async function loadRoom() {
       try {
         const response = await fetch(`/api/rooms/${roomId}`, {
-          credentials: "include"
+          credentials: "include",
         });
 
         if (!response.ok) {
@@ -273,14 +415,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
       audioCaptureRef.current?.updateMetadata({
         roomId,
         participantId: participantIdRef.current,
-        spokenLanguage: language
+        spokenLanguage: language,
       });
 
       if (socket.connected) {
         socket.emit("participant:language", {
           roomId,
           participantId: participantIdRef.current,
-          spokenLanguage: language
+          spokenLanguage: language,
         });
       }
     }
@@ -312,6 +454,42 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }, [callState, hasRemoteVideo]);
 
+  const stopLocalSpeakingMonitor = useCallback(() => {
+    stopSpeakingMonitor(
+      speakingMonitorRef,
+      isLocalSpeakingRef,
+      setIsLocalSpeaking,
+    );
+  }, []);
+
+  const startLocalSpeakingMonitor = useCallback((stream: MediaStream) => {
+    startSpeakingMonitor({
+      monitorRef: speakingMonitorRef,
+      setSpeaking: setIsLocalSpeaking,
+      speakingRef: isLocalSpeakingRef,
+      stream,
+    });
+  }, []);
+
+  const stopRemoteSpeakingMonitor = useCallback(() => {
+    stopSpeakingMonitor(
+      remoteSpeakingMonitorRef,
+      isRemoteSpeakingRef,
+      setIsRemoteSpeaking,
+    );
+  }, []);
+
+  const startRemoteSpeakingMonitor = useCallback((stream: MediaStream) => {
+    startSpeakingMonitor({
+      monitorRef: remoteSpeakingMonitorRef,
+      quietFramesToStop: 24,
+      setSpeaking: setIsRemoteSpeaking,
+      speakingRef: isRemoteSpeakingRef,
+      stream,
+      threshold: 0.018,
+    });
+  }, []);
+
   const ensurePeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
       return peerConnectionRef.current;
@@ -334,18 +512,31 @@ export function CallRoom({ roomId }: { roomId: string }) {
         socket.emit("webrtc:ice-candidate", {
           roomId,
           from: participantIdRef.current,
-          candidate: event.candidate
+          candidate: event.candidate,
         });
       }
     };
 
     peerConnection.ontrack = (event) => {
       for (const track of event.streams[0]?.getTracks() ?? [event.track]) {
-        remoteStream.addTrack(track);
+        if (!remoteStream.getTracks().some((item) => item.id === track.id)) {
+          remoteStream.addTrack(track);
+        }
+      }
+
+      if (
+        !remoteSpeakingMonitorRef.current &&
+        remoteStream
+          .getAudioTracks()
+          .some((track) => track.readyState === "live")
+      ) {
+        startRemoteSpeakingMonitor(remoteStream);
       }
 
       setHasRemoteVideo(
-        remoteStream.getVideoTracks().some((track) => track.readyState === "live")
+        remoteStream
+          .getVideoTracks()
+          .some((track) => track.readyState === "live"),
       );
       setCallState("connected");
     };
@@ -366,7 +557,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     peerConnectionRef.current = peerConnection;
     return peerConnection;
-  }, [roomId, socket]);
+  }, [roomId, socket, startRemoteSpeakingMonitor]);
 
   const createAndSendOffer = useCallback(async () => {
     const peerConnection = ensurePeerConnection();
@@ -377,14 +568,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     const offer = await peerConnection.createOffer({
       offerToReceiveAudio: true,
-      offerToReceiveVideo: true
+      offerToReceiveVideo: true,
     });
     await peerConnection.setLocalDescription(offer);
 
     socket.emit("webrtc:offer", {
       roomId,
       from: participantIdRef.current,
-      description: peerConnection.localDescription
+      description: peerConnection.localDescription,
     });
   }, [ensurePeerConnection, roomId, socket]);
 
@@ -404,16 +595,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
       metadata: {
         roomId,
         participantId: participantIdRef.current,
-        spokenLanguage: languageRef.current
+        spokenLanguage: languageRef.current,
       },
       onSegment: (metadata, segment) => {
         socket.emit("audio:segment", {
           ...metadata,
           audio: segment.audio,
           isFinal: segment.isFinal,
-          clientSegmentId: segment.clientSegmentId
+          clientSegmentId: segment.clientSegmentId,
         });
-      }
+      },
     });
     await audioCaptureRef.current.start();
     return true;
@@ -426,97 +617,20 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setLocalPartialCaption(null);
   }, []);
 
-  const stopLocalSpeakingMonitor = useCallback(() => {
-    const monitor = speakingMonitorRef.current;
-
-    if (monitor) {
-      window.cancelAnimationFrame(monitor.frameId);
-      monitor.source.disconnect();
-      monitor.analyser.disconnect();
-      void monitor.audioContext.close().catch(() => undefined);
-      speakingMonitorRef.current = null;
-    }
-
-    isLocalSpeakingRef.current = false;
-    setIsLocalSpeaking(false);
-  }, []);
-
-  const startLocalSpeakingMonitor = useCallback(
-    (stream: MediaStream) => {
-      stopLocalSpeakingMonitor();
-
-      const AudioContextConstructor =
-        window.AudioContext ??
-        (window as typeof window & {
-          webkitAudioContext?: typeof AudioContext;
-        }).webkitAudioContext;
-
-      if (!AudioContextConstructor || stream.getAudioTracks().length === 0) {
+  const flushPendingIceCandidates = useCallback(
+    async (peerConnection: RTCPeerConnection) => {
+      if (!peerConnection.remoteDescription) {
         return;
       }
 
-      const audioContext = new AudioContextConstructor();
-      const analyser = audioContext.createAnalyser();
-      const source = audioContext.createMediaStreamSource(stream);
-      let speakingFrames = 0;
-      let quietFrames = 0;
+      const pendingCandidates = pendingIceCandidatesRef.current;
+      pendingIceCandidatesRef.current = [];
 
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.72;
-      const samples = new Uint8Array(analyser.fftSize);
-      source.connect(analyser);
-      void audioContext.resume().catch(() => undefined);
-
-      function setSpeaking(nextValue: boolean) {
-        if (isLocalSpeakingRef.current === nextValue) {
-          return;
-        }
-
-        isLocalSpeakingRef.current = nextValue;
-        setIsLocalSpeaking(nextValue);
+      for (const candidate of pendingCandidates) {
+        await peerConnection.addIceCandidate(candidate).catch(() => undefined);
       }
-
-      function tick() {
-        analyser.getByteTimeDomainData(samples);
-
-        let sum = 0;
-        for (const sample of samples) {
-          const centered = (sample - 128) / 128;
-          sum += centered * centered;
-        }
-
-        const rms = Math.sqrt(sum / samples.length);
-
-        if (rms > 0.025) {
-          speakingFrames += 1;
-          quietFrames = 0;
-        } else {
-          quietFrames += 1;
-          speakingFrames = 0;
-        }
-
-        if (speakingFrames >= 2) {
-          setSpeaking(true);
-        }
-
-        if (quietFrames >= 20) {
-          setSpeaking(false);
-        }
-
-        const currentMonitor = speakingMonitorRef.current;
-        if (currentMonitor) {
-          currentMonitor.frameId = window.requestAnimationFrame(tick);
-        }
-      }
-
-      speakingMonitorRef.current = {
-        analyser,
-        audioContext,
-        frameId: window.requestAnimationFrame(tick),
-        source
-      };
     },
-    [stopLocalSpeakingMonitor]
+    [],
   );
 
   const stopLocalMediaTracks = useCallback((stream: MediaStream | null) => {
@@ -548,13 +662,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }) {
       const peerConnection = ensurePeerConnection();
       await peerConnection.setRemoteDescription(payload.description);
+      await flushPendingIceCandidates(peerConnection);
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
 
       socket.emit("webrtc:answer", {
         roomId,
         from: participantIdRef.current,
-        description: peerConnection.localDescription
+        description: peerConnection.localDescription,
       });
     }
 
@@ -565,12 +680,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
       if (peerConnection.signalingState !== "stable") {
         await peerConnection.setRemoteDescription(payload.description);
+        await flushPendingIceCandidates(peerConnection);
       }
     }
 
-    async function handleIceCandidate(payload: { candidate: RTCIceCandidateInit }) {
+    async function handleIceCandidate(payload: {
+      candidate: RTCIceCandidateInit;
+    }) {
       const peerConnection = ensurePeerConnection();
-      await peerConnection.addIceCandidate(payload.candidate).catch(() => undefined);
+
+      if (!peerConnection.remoteDescription) {
+        pendingIceCandidatesRef.current.push(payload.candidate);
+        return;
+      }
+
+      await peerConnection
+        .addIceCandidate(payload.candidate)
+        .catch(() => undefined);
     }
 
     function handleCaption(caption: CaptionEvent) {
@@ -614,12 +740,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     function handlePeerLeft() {
+      stopRemoteSpeakingMonitor();
       setHasRemoteVideo(false);
       setRemoteDisplayName("");
       setCallState("waiting");
       closePeerConnection(peerConnectionRef.current);
       peerConnectionRef.current = null;
       remoteStreamRef.current = null;
+      pendingIceCandidatesRef.current = [];
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = null;
       }
@@ -627,10 +755,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     function handleRoomEnded(payload?: { endedBy?: string }) {
       stopLocalSubtitleCapture();
+      stopRemoteSpeakingMonitor();
       resetLocalMediaState();
       closePeerConnection(peerConnectionRef.current);
       peerConnectionRef.current = null;
       remoteStreamRef.current = null;
+      pendingIceCandidatesRef.current = [];
       setHasRemoteVideo(false);
       setRemoteDisplayName("");
       setCallState("disconnected");
@@ -669,7 +799,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           roomCode: roomCodeRef.current,
           participantId: participantIdRef.current,
           displayName: displayNameRef.current,
-          spokenLanguage: languageRef.current
+          spokenLanguage: languageRef.current,
         },
         async (response: JoinResponse) => {
           if (!response.ok) {
@@ -679,14 +809,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
           setIsRoomHost(response.isCreator);
           setIsSubtitleServiceStarted(response.subtitleServiceStarted);
-          setRemoteDisplayName(response.otherParticipants[0]?.displayName ?? "");
+          setRemoteDisplayName(
+            response.otherParticipants[0]?.displayName ?? "",
+          );
           if (response.subtitleServiceStarted) {
             void startLocalSubtitleCapture();
           }
           if (response.otherParticipants.length > 0) {
             await createAndSendOffer();
           }
-        }
+        },
       );
     }
 
@@ -727,9 +859,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
     router,
     socket,
     resetLocalMediaState,
+    flushPendingIceCandidates,
     showSubtitleServiceBanner,
     startLocalSubtitleCapture,
-    stopLocalSubtitleCapture
+    stopRemoteSpeakingMonitor,
+    stopLocalSubtitleCapture,
   ]);
 
   useEffect(() => {
@@ -739,16 +873,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
         roomEndRedirectTimeoutRef.current = null;
       }
       stopLocalSubtitleCapture();
+      stopRemoteSpeakingMonitor();
       resetLocalMediaState();
       closePeerConnection(peerConnectionRef.current);
       if (socket.connected) {
         socket.emit("room:leave", {
           roomId,
-          participantId: participantIdRef.current
+          participantId: participantIdRef.current,
         });
       }
     };
-  }, [resetLocalMediaState, roomId, socket, stopLocalSubtitleCapture]);
+  }, [
+    resetLocalMediaState,
+    roomId,
+    socket,
+    stopLocalSubtitleCapture,
+    stopRemoteSpeakingMonitor,
+  ]);
 
   async function requestMedia() {
     if (
@@ -768,22 +909,24 @@ export function CallRoom({ roomId }: { roomId: string }) {
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
         },
-        video: false
+        video: false,
       });
     } catch (mediaError) {
       throw new Error(
-        mediaError instanceof DOMException && mediaError.name === "NotAllowedError"
+        mediaError instanceof DOMException &&
+          mediaError.name === "NotAllowedError"
           ? "microphone-denied"
-          : "microphone-unavailable"
+          : "microphone-unavailable",
       );
     }
 
-    const enhancedMicrophone = await createEnhancedMicrophoneStream(audioStream);
+    const enhancedMicrophone =
+      await createEnhancedMicrophoneStream(audioStream);
     audioEnhancementStopRef.current = enhancedMicrophone.stop;
     const combinedStream = new MediaStream(
-      enhancedMicrophone.stream.getAudioTracks()
+      enhancedMicrophone.stream.getAudioTracks(),
     );
 
     for (const track of combinedStream.getAudioTracks()) {
@@ -800,8 +943,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
           video: {
             facingMode: "user",
             width: { ideal: 960 },
-            height: { ideal: 720 }
-          }
+            height: { ideal: 720 },
+          },
         });
 
         for (const track of videoStream.getVideoTracks()) {
@@ -812,9 +955,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
       } catch (mediaError) {
         setIsCameraEnabled(false);
         setCameraError(
-          mediaError instanceof DOMException && mediaError.name === "NotAllowedError"
+          mediaError instanceof DOMException &&
+            mediaError.name === "NotAllowedError"
             ? t(languageRef.current, "cameraPermissionDenied")
-            : t(languageRef.current, "cameraUnavailable")
+            : t(languageRef.current, "cameraUnavailable"),
         );
       }
     }
@@ -892,7 +1036,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         roomCode,
         participantId: participantIdRef.current,
         displayName,
-        spokenLanguage: language
+        spokenLanguage: language,
       },
       async (response: JoinResponse) => {
         if (!response.ok) {
@@ -909,7 +1053,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         setRemoteDisplayName(response.otherParticipants[0]?.displayName ?? "");
 
         setCallState(
-          response.otherParticipants.length > 0 ? "connecting" : "waiting"
+          response.otherParticipants.length > 0 ? "connecting" : "waiting",
         );
 
         if (response.subtitleServiceStarted) {
@@ -919,7 +1063,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         if (response.otherParticipants.length > 0) {
           await createAndSendOffer();
         }
-      }
+      },
     );
   }
 
@@ -987,7 +1131,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     try {
       const videoStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: "user" }
+        video: { facingMode: "user" },
       });
       const [track] = videoStream.getVideoTracks();
 
@@ -1020,7 +1164,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         "subtitle:stop-service",
         {
           roomId,
-          participantId: participantIdRef.current
+          participantId: participantIdRef.current,
         },
         (response: StopSubtitleServiceResponse) => {
           if (!response.ok) {
@@ -1030,7 +1174,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
           setIsSubtitleServiceStarted(false);
           stopLocalSubtitleCapture();
-        }
+        },
       );
       return;
     }
@@ -1040,7 +1184,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       "subtitle:start-service",
       {
         roomId,
-        participantId: participantIdRef.current
+        participantId: participantIdRef.current,
       },
       async (response: StartSubtitleServiceResponse) => {
         setIsStartingSubtitleService(false);
@@ -1056,7 +1200,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         if (!started) {
           setError(t(languageRef.current, "subtitleServiceUnavailable"));
         }
-      }
+      },
     );
   }
 
@@ -1066,12 +1210,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
       roomEndRedirectTimeoutRef.current = null;
     }
     stopLocalSubtitleCapture();
+    stopRemoteSpeakingMonitor();
     resetLocalMediaState();
     closePeerConnection(peerConnectionRef.current);
     peerConnectionRef.current = null;
+    pendingIceCandidatesRef.current = [];
     socket.emit("room:leave", {
       roomId,
-      participantId: participantIdRef.current
+      participantId: participantIdRef.current,
     });
     router.push("/");
   }
@@ -1101,17 +1247,24 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return t(language, "disconnected");
     }
 
-    return roomInfo?.isCreator ? t(language, "roomSetup") : t(language, "joinCall");
+    return roomInfo?.isCreator
+      ? t(language, "roomSetup")
+      : t(language, "joinCall");
   }, [callState, language, roomInfo?.isCreator]);
 
   const canEnterRoom =
     Boolean(language && roomInfo) &&
     (roomInfo?.isCreator || /^\d{4}$/.test(roomCode));
   const canPrepareMedia =
-    callState === "idle" && Boolean(roomInfo) && !isPreparingMedia && !isMediaReady;
+    callState === "idle" &&
+    Boolean(roomInfo) &&
+    !isPreparingMedia &&
+    !isMediaReady;
   const canJoin =
     callState === "idle" && canEnterRoom && isMediaReady && !isPreparingMedia;
-  const isCameraOnForControls = isMediaReady ? isCameraEnabled : !startWithCameraOff;
+  const isCameraOnForControls = isMediaReady
+    ? isCameraEnabled
+    : !startWithCameraOff;
   const hostRoomCode = roomInfo?.isCreator ? roomInfo.roomCode : undefined;
   const remoteParticipantStatus = useMemo(() => {
     if (!language) {
@@ -1195,12 +1348,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
           >
             <div className="min-w-0 flex-1">
               <p className="garden-kicker flex items-center gap-2">
-                <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
+                <Flower2
+                  className="garden-icon-blush h-4 w-4"
+                  aria-hidden="true"
+                />
                 {t(language, "appName")}
               </p>
               <p
                 className={`garden-title mt-2 ${
-                  callState === "idle" ? "text-2xl sm:text-3xl" : "text-xl sm:text-2xl"
+                  callState === "idle"
+                    ? "text-2xl sm:text-3xl"
+                    : "text-xl sm:text-2xl"
                 }`}
               >
                 {statusText}
@@ -1214,8 +1372,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
               {hostRoomCode ? (
                 <button
                   type="button"
-                  aria-label={isCodeCopied ? t(language, "copied") : t(language, "copyRoomCode")}
-                  title={isCodeCopied ? t(language, "copied") : t(language, "copyRoomCode")}
+                  aria-label={
+                    isCodeCopied
+                      ? t(language, "copied")
+                      : t(language, "copyRoomCode")
+                  }
+                  title={
+                    isCodeCopied
+                      ? t(language, "copied")
+                      : t(language, "copyRoomCode")
+                  }
                   onClick={handleCopyCode}
                   className="garden-button garden-button-quiet h-12 min-w-0 flex-1 gap-2 px-4 text-sm sm:flex-none sm:text-base"
                 >
@@ -1321,7 +1487,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
                       ) : (
                         <Mic className="h-5 w-5" aria-hidden="true" />
                       )}
-                      {isMuted ? t(language, "startMuted") : t(language, "startUnmuted")}
+                      {isMuted
+                        ? t(language, "startMuted")
+                        : t(language, "startUnmuted")}
                     </button>
                     {videoCallingEnabled ? (
                       <button
@@ -1384,6 +1552,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 hasLocalVideo={videoCallingEnabled && isCameraEnabled}
                 hasRemoteVideo={videoCallingEnabled && hasRemoteVideo}
                 isLocalSpeaking={isLocalSpeaking}
+                isRemoteSpeaking={isRemoteSpeaking}
                 localName={displayName}
                 localAction={
                   <button
@@ -1490,7 +1659,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </>
           )}
         </section>
-
       </div>
 
       {callState !== "idle" ? (

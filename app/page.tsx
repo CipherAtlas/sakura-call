@@ -1,7 +1,16 @@
 "use client";
 
-import { ArrowLeft, Flower2, Leaf, Settings, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  Flower2,
+  KeyRound,
+  Leaf,
+  Settings,
+  Sparkles,
+  X
+} from "lucide-react";
 import { useRouter } from "next/navigation";
+import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { LanguageGate } from "@/components/LanguageGate";
 import { UsernameGate } from "@/components/UsernameGate";
@@ -25,6 +34,11 @@ export default function HomePage() {
   const [homeMode, setHomeMode] = useState<"choose" | "join">("choose");
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
+  const [ownerAccessConfigured, setOwnerAccessConfigured] = useState(false);
+  const [ownerToken, setOwnerToken] = useState("");
+  const [isOwnerSigningIn, setIsOwnerSigningIn] = useState(false);
+  const [ownerMessage, setOwnerMessage] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState("");
@@ -33,6 +47,65 @@ export default function HomePage() {
     setLanguage(getSavedLanguage());
     setDisplayName(getSavedDisplayName());
   }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadOwnerStatus() {
+      try {
+        const response = await fetch("/api/owner", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as {
+          isOwner: boolean;
+          ownerAccessConfigured: boolean;
+        };
+
+        if (!isActive) {
+          return;
+        }
+
+        setIsOwner(data.isOwner);
+        setOwnerAccessConfigured(data.ownerAccessConfigured);
+        setHomeMode(data.isOwner ? "choose" : "join");
+      } catch {
+        if (isActive) {
+          setHomeMode("join");
+        }
+      }
+    }
+
+    void loadOwnerStatus();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showSettings) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowSettings(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.classList.add("garden-modal-open");
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.classList.remove("garden-modal-open");
+    };
+  }, [showSettings]);
 
   async function handleCreateRoom() {
     if (!language) {
@@ -51,6 +124,18 @@ export default function HomePage() {
         body: JSON.stringify({ spokenLanguage: language })
       });
 
+      if (response.status === 403) {
+        setIsOwner(false);
+        setHomeMode("join");
+        setError(t(language, "hostAccessRequired"));
+        return;
+      }
+
+      if (response.status === 429) {
+        setError(t(language, "codeBlocked"));
+        return;
+      }
+
       if (!response.ok) {
         throw new Error("create-room-failed");
       }
@@ -61,6 +146,53 @@ export default function HomePage() {
       setError(t(language, "createRoomFailed"));
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function handleUnlockHostMode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!language || !ownerToken.trim()) {
+      return;
+    }
+
+    setIsOwnerSigningIn(true);
+    setOwnerMessage("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/owner/session", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ token: ownerToken })
+      });
+
+      if (response.status === 503) {
+        setOwnerMessage(t(language, "hostAccessNotConfigured"));
+        return;
+      }
+
+      if (response.status === 429) {
+        setOwnerMessage(t(language, "codeBlocked"));
+        return;
+      }
+
+      if (!response.ok) {
+        setOwnerMessage(t(language, "hostAccessDenied"));
+        return;
+      }
+
+      setIsOwner(true);
+      setOwnerAccessConfigured(true);
+      setOwnerToken("");
+      setOwnerMessage(t(language, "hostModeEnabled"));
+      setHomeMode("choose");
+    } catch {
+      setOwnerMessage(t(language, "hostAccessDenied"));
+    } finally {
+      setIsOwnerSigningIn(false);
     }
   }
 
@@ -124,7 +256,7 @@ export default function HomePage() {
   function handleBackToUsername() {
     clearSavedDisplayName();
     setDisplayName("");
-    setHomeMode("choose");
+    setHomeMode(isOwner ? "choose" : "join");
     setError("");
   }
 
@@ -138,6 +270,8 @@ export default function HomePage() {
     setRoomCode("");
     setError("");
   }
+
+  const effectiveHomeMode = isOwner ? homeMode : "join";
 
   if (!language) {
     return <LanguageGate onSelect={handleLanguageSelect} />;
@@ -164,10 +298,12 @@ export default function HomePage() {
                 {t(language, "appName")}
               </p>
               <h1 className="garden-title mt-3 text-3xl sm:text-4xl">
-                {homeMode === "join" ? t(language, "joinWithCode") : t(language, "homeTitle")}
+                {effectiveHomeMode === "join"
+                  ? t(language, "joinWithCode")
+                  : t(language, "homeTitle")}
               </h1>
               <p className="garden-muted mt-2 max-w-sm text-sm font-bold leading-snug">
-                {homeMode === "join"
+                {effectiveHomeMode === "join"
                   ? t(language, "codeHelpGuest")
                   : t(language, "homeFootnote")}
               </p>
@@ -176,7 +312,11 @@ export default function HomePage() {
               <button
                 type="button"
                 aria-label={t(language, "back")}
-                onClick={homeMode === "join" ? handleBackToChoices : handleBackToUsername}
+                onClick={
+                  isOwner && effectiveHomeMode === "join"
+                    ? handleBackToChoices
+                    : handleBackToUsername
+                }
                 className="garden-icon-button grid h-11 w-11 place-items-center rounded-full"
               >
                 <ArrowLeft className="h-5 w-5" aria-hidden="true" />
@@ -184,7 +324,7 @@ export default function HomePage() {
               <button
                 type="button"
                 aria-label={t(language, "settings")}
-                onClick={() => setShowSettings((value) => !value)}
+                onClick={() => setShowSettings(true)}
                 className="garden-icon-button grid h-11 w-11 place-items-center rounded-full"
               >
                 <Settings className="h-5 w-5" aria-hidden="true" />
@@ -192,31 +332,7 @@ export default function HomePage() {
             </div>
           </header>
 
-          {showSettings ? (
-            <div className="mt-4 border-t border-pink-200/60 pt-4">
-            <p className="garden-text-muted text-sm font-black">
-              {t(language, "changeLanguage")}
-            </p>
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              {(["en", "ja"] as const).map((code) => (
-                <button
-                  key={code}
-                  type="button"
-                  onClick={() => handleLanguageSelect(code)}
-                  className={`garden-button h-14 border px-4 text-lg ${
-                    language === code
-                      ? "garden-button-primary border-transparent"
-                      : "garden-button-quiet"
-                  }`}
-                >
-                  {languageLabel(code)}
-                </button>
-              ))}
-            </div>
-            </div>
-          ) : null}
-
-          {homeMode === "choose" ? (
+          {effectiveHomeMode === "choose" ? (
             <div className="mt-5 grid gap-3">
               <button
                 type="button"
@@ -282,6 +398,109 @@ export default function HomePage() {
           </p>
         </div>
       </section>
+
+      {showSettings ? (
+        <div
+          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
+          onClick={() => setShowSettings(false)}
+        >
+          <section
+            aria-labelledby="settings-modal-title"
+            aria-modal="true"
+            className="settings-modal w-full max-w-sm overflow-hidden"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-ribbon" aria-hidden="true" />
+            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
+              <div className="min-w-0">
+                <p className="garden-kicker flex items-center gap-2">
+                  <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
+                  {t(language, "appName")}
+                </p>
+                <h2
+                  className="garden-title mt-2 text-2xl"
+                  id="settings-modal-title"
+                >
+                  {t(language, "settings")}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label={t(language, "closeSettings")}
+                onClick={() => setShowSettings(false)}
+                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="grid gap-4 px-5 pb-5">
+              <section className="settings-modal-section">
+                <p className="garden-text-muted text-sm font-black">
+                  {t(language, "changeLanguage")}
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {(["en", "ja"] as const).map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => handleLanguageSelect(code)}
+                      className={`garden-button h-14 border px-4 text-lg ${
+                        language === code
+                          ? "garden-button-primary border-transparent"
+                          : "garden-button-quiet"
+                      }`}
+                    >
+                      {languageLabel(code)}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="settings-modal-section">
+                <p className="garden-text-muted flex items-center gap-2 text-sm font-black">
+                  <KeyRound className="garden-icon-lilac h-4 w-4" aria-hidden="true" />
+                  {t(language, "hostAccess")}
+                </p>
+                {isOwner ? (
+                  <p className="garden-muted mt-2 text-sm font-black">
+                    {t(language, "hostModeEnabled")}
+                  </p>
+                ) : ownerAccessConfigured ? (
+                  <form className="mt-3 grid gap-3" onSubmit={handleUnlockHostMode}>
+                    <input
+                      type="password"
+                      value={ownerToken}
+                      onChange={(event) => setOwnerToken(event.target.value)}
+                      placeholder={t(language, "hostPasscode")}
+                      className="garden-input h-12 w-full px-4 text-base font-black"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!ownerToken.trim() || isOwnerSigningIn}
+                      className="garden-button garden-button-secondary h-12 w-full px-4 text-base"
+                    >
+                      {isOwnerSigningIn
+                        ? t(language, "unlockingHostMode")
+                        : t(language, "unlockHostMode")}
+                    </button>
+                  </form>
+                ) : (
+                  <p className="garden-muted mt-2 text-sm font-black">
+                    {t(language, "hostAccessNotConfigured")}
+                  </p>
+                )}
+                {ownerMessage ? (
+                  <p className="garden-muted mt-2 text-sm font-black">
+                    {ownerMessage}
+                  </p>
+                ) : null}
+              </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

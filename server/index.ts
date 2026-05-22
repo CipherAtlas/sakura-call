@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import crypto from "node:crypto";
 import nextEnv from "@next/env";
 import next from "next";
 import { isSupportedLanguage } from "../lib/i18n";
@@ -25,6 +26,12 @@ const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 const publicHostname = process.env.CLOUDFLARE_HOSTNAME || "call.sabarg.com";
 const hstsHeaderValue = "max-age=31536000; includeSubDomains";
+const ownerCookieName = "jec_owner";
+const ownerAccessToken =
+  process.env.ROOM_OWNER_TOKEN || process.env.CLOUDFLARE_CALL_API_TOKEN || "";
+const ownerSessionSecret =
+  process.env.ROOM_OWNER_SESSION_SECRET || ownerAccessToken;
+const ownerSessionMaxAge = 60 * 60 * 24 * 14;
 
 type RateLimitState = {
   count: number;
@@ -32,6 +39,8 @@ type RateLimitState = {
 };
 
 const joinCodeRateLimits = new Map<string, RateLimitState>();
+const createRoomRateLimits = new Map<string, RateLimitState>();
+const ownerLoginRateLimits = new Map<string, RateLimitState>();
 
 function headerValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -77,6 +86,41 @@ function consumeRateLimit(
 
   state.count += 1;
   return true;
+}
+
+function ownerSessionValue() {
+  if (!ownerAccessToken || !ownerSessionSecret) {
+    return "";
+  }
+
+  return crypto
+    .createHmac("sha256", ownerSessionSecret)
+    .update(ownerAccessToken)
+    .digest("base64url");
+}
+
+function constantTimeEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.byteLength !== rightBuffer.byteLength) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isOwnerRequest(request: IncomingMessage) {
+  const expected = ownerSessionValue();
+
+  if (!expected) {
+    return false;
+  }
+
+  const cookies = parseCookies(request.headers.cookie);
+  const actual = cookies[ownerCookieName];
+
+  return Boolean(actual && constantTimeEqual(actual, expected));
 }
 
 function isLocalHost(host: string) {
@@ -150,10 +194,86 @@ function shouldUseSecureCookie(request: IncomingMessage) {
   return process.env.NODE_ENV === "production" && !isLocalHost(host);
 }
 
+async function handleOwnerApi(request: IncomingMessage, response: ServerResponse) {
+  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
+
+  if (request.method === "GET" && url.pathname === "/api/owner") {
+    sendJson(response, 200, {
+      isOwner: isOwnerRequest(request),
+      ownerAccessConfigured: Boolean(ownerAccessToken)
+    });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/owner/session") {
+    if (!ownerAccessToken) {
+      sendJson(response, 503, { error: "owner-access-not-configured" });
+      return true;
+    }
+
+    if (
+      !consumeRateLimit(
+        ownerLoginRateLimits,
+        `owner-login:${requestIp(request)}`,
+        8,
+        60_000
+      )
+    ) {
+      sendJson(response, 429, { error: "too-many-attempts" });
+      return true;
+    }
+
+    const body = (await readJson(request).catch(() => null)) as {
+      token?: unknown;
+    } | null;
+    const token = typeof body?.token === "string" ? body.token : "";
+
+    if (!constantTimeEqual(token, ownerAccessToken)) {
+      sendJson(response, 401, { error: "invalid-owner-token" });
+      return true;
+    }
+
+    const cookie = `${ownerCookieName}=${encodeURIComponent(
+      ownerSessionValue()
+    )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ownerSessionMaxAge}${
+      shouldUseSecureCookie(request) ? "; Secure" : ""
+    }`;
+
+    sendJson(
+      response,
+      200,
+      { isOwner: true },
+      {
+        "set-cookie": cookie
+      }
+    );
+    return true;
+  }
+
+  return false;
+}
+
 async function handleRoomApi(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
 
   if (request.method === "POST" && url.pathname === "/api/rooms") {
+    if (!isOwnerRequest(request)) {
+      sendJson(response, 403, { error: "owner-required" });
+      return true;
+    }
+
+    if (
+      !consumeRateLimit(
+        createRoomRateLimits,
+        `create-room:${requestIp(request)}`,
+        6,
+        60_000
+      )
+    ) {
+      sendJson(response, 429, { error: "too-many-attempts" });
+      return true;
+    }
+
     const body = (await readJson(request).catch(() => null)) as {
       spokenLanguage?: unknown;
     } | null;
@@ -264,6 +384,10 @@ const httpServer = createServer((request, response) => {
     }
 
     applySecurityHeaders(request, response);
+
+    if (await handleOwnerApi(request, response)) {
+      return;
+    }
 
     if (await handleRoomApi(request, response)) {
       return;
