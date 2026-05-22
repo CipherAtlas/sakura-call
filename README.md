@@ -115,6 +115,11 @@ OCI_TURN_INSTANCE_ID=
 OCI_TURN_SSH_USER=ubuntu
 OCI_TURN_SSH_KEY_FILE=
 OCI_TURN_STOP_INSTANCE_ON_EXIT=1
+OCI_USER_OCID=
+OCI_FINGERPRINT=
+OCI_TENANCY_OCID=
+OCI_REGION=
+OCI_PRIVATE_KEY_FILE=
 ROOM_OWNER_TOKEN=
 ROOM_OWNER_SESSION_SECRET=
 CLOUDFLARE_API_TOKEN=
@@ -136,10 +141,32 @@ Notes:
 - `NEXT_PUBLIC_*` TURN credentials are visible to browsers. This is acceptable for private local testing, but use short-lived server-generated TURN credentials before opening the app to untrusted users.
 - `TURN_MODE=auto` uses the OCI TURN VM when `OCI_TURN_INSTANCE_ID` is set, otherwise it falls back to the local Docker coturn container.
 - `OCI_TURN_STOP_INSTANCE_ON_EXIT=1` stops the OCI TURN VM when `run.sh` exits, matching the on-demand usage model.
+- `OCI_USER_OCID`, `OCI_FINGERPRINT`, `OCI_TENANCY_OCID`, `OCI_REGION`, and `OCI_PRIVATE_KEY_FILE` are used by `run.sh` to create a temporary OCI CLI config. Lowercase OCI variable names from the Oracle download also work.
 - `ROOM_OWNER_TOKEN` is the private passcode used to unlock host mode in Settings. Room creation is disabled when neither `ROOM_OWNER_TOKEN` nor `CLOUDFLARE_CALL_API_TOKEN` is set.
 - `ROOM_OWNER_SESSION_SECRET` signs the host session cookie. It falls back to `ROOM_OWNER_TOKEN` when unset.
 - Cloudflare variables are only required for `npm run tunnel:setup`, `npm run tunnel:run`, and `./run.sh`.
 - Do not commit `.env` or `.env.local`.
+
+## Recommended On-Demand Run Flow
+
+Use this flow for real calls with one other person:
+
+```bash
+./run.sh
+```
+
+The script owns the full runtime lifecycle:
+
+1. Clears the local app ports.
+2. Starts the OCI TURN VM when `OCI_TURN_INSTANCE_ID` is configured.
+3. Waits for the VM and SSH to become ready.
+4. Starts coturn on the VM with a per-run TURN password when no password is configured.
+5. Builds the app with the current TURN public IP.
+6. Starts the production app on port `3010`.
+7. Starts the Cloudflare Tunnel for the HTTPS app URL.
+8. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, coturn, and the OCI VM.
+
+The intended usage is private and temporary: start the script, make the call, then stop the script. Do not leave it running as a public service.
 
 ## Local TURN Server
 
@@ -161,6 +188,80 @@ For remote callers, `localhost` is not enough. The TURN server must be reachable
 
 `run.sh` starts TURN automatically before building the app. With `OCI_TURN_INSTANCE_ID` set, it starts the OCI VM if needed, starts coturn over SSH, exports matching `NEXT_PUBLIC_TURN_URLS`, and stops coturn plus the VM when the script exits. If `TURN_PASSWORD`/`NEXT_PUBLIC_TURN_CREDENTIAL` is unset or left as `change-me`, `run.sh` generates an ephemeral TURN password for that run. Without OCI vars, it uses the local Docker container with `TURN_HOST=auto`. Use `TURN_HOST=localhost TURN_MODE=local ./run.sh` for same-machine testing, or `TURN_ENABLED=0 ./run.sh` to skip TURN.
 
+Cloudflare Tunnel only exposes the HTTP app. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
+
+- `3478/tcp`
+- `3478/udp`
+- `49160-49200/udp`
+
+That is why the OCI VM has a public IP and network security rules for those TURN ports.
+
+## OCI TURN VM Setup
+
+The current hosted fallback uses a small Oracle Cloud Always Free eligible VM dedicated to coturn:
+
+- Shape: `VM.Standard.E2.1.Micro`
+- CPU: `1 OCPU`
+- RAM: `1 GB`
+- Boot volume: about `47 GB`
+- Region: `ap-mumbai-1`
+- OS user: `ubuntu`
+- Service: `coturn`
+
+The VM should live in the `sakura-call-free-only` compartment. Keep all Sakura Call networking and compute resources in that compartment so the budget and quota guardrails apply.
+
+The VM is expected to have these scripts:
+
+```text
+/opt/sakura-turn/start-turn.sh
+/opt/sakura-turn/stop-turn.sh
+```
+
+`run.sh` calls those scripts over SSH. The start script receives the current public IP and `TURN_USERNAME`/`TURN_PASSWORD` environment variables, then starts coturn for that run. The stop script stops coturn before the VM is shut down.
+
+Your local `.env` or `.env.local` needs the instance and SSH values:
+
+```bash
+OCI_TURN_INSTANCE_ID=ocid1.instance...
+OCI_TURN_SSH_USER=ubuntu
+OCI_TURN_SSH_KEY_FILE=/Users/you/.ssh/sakura_call_oci_turn
+OCI_TURN_STOP_INSTANCE_ON_EXIT=1
+```
+
+It also needs OCI API credentials so `run.sh` can start and stop the VM:
+
+```bash
+OCI_USER_OCID=ocid1.user...
+OCI_FINGERPRINT=...
+OCI_TENANCY_OCID=ocid1.tenancy...
+OCI_REGION=ap-mumbai-1
+OCI_PRIVATE_KEY_FILE=/Users/you/.oci/oci_api_key.pem
+```
+
+Oracle's generated lowercase names also work:
+
+```bash
+oci_user=ocid1.user...
+oci_fingerprint=...
+oci_tenancy=ocid1.tenancy...
+oci_region=ap-mumbai-1
+oci_key_file=/Users/you/.oci/oci_api_key.pem
+```
+
+Keep the OCI private key outside the repo and set it to owner-only permissions:
+
+```bash
+chmod 600 /Users/you/.oci/oci_api_key.pem
+```
+
+Install the OCI CLI locally before using OCI mode:
+
+```bash
+pipx install oci-cli
+```
+
+`run.sh` writes a temporary OCI CLI config from the env values. It does not require a permanent `~/.oci/config`.
+
 ## OCI Guardrails
 
 The OCI TURN resources live in the `sakura-call-free-only` compartment. That compartment has:
@@ -172,6 +273,8 @@ The OCI TURN resources live in the `sakura-call-free-only` compartment. That com
 
 Budgets are alerts, not hard spending stops. The quota policy is the hard guardrail for accidentally creating larger resources inside the Sakura Call compartment.
 
+When the VM is stopped, the boot volume remains. That is expected and is covered by the block-storage quota. The public IP is not reserved, so it may change between starts; `run.sh` fetches the current public IP every run and rebuilds the app with the matching TURN URL.
+
 ## Commands
 
 ```bash
@@ -182,7 +285,7 @@ npm run tunnel:run    # Run the Cloudflare Tunnel
 npm run lint          # Run ESLint
 npm run typecheck     # Run TypeScript without emitting files
 npm run build         # Build the Next.js app
-./run.sh              # Start the public local test flow in one terminal
+./run.sh              # Start app, tunnel, and TURN, then stop them on exit
 ```
 
 ## How The Call Flow Works
@@ -344,7 +447,7 @@ You can also use the convenience script:
 ./run.sh
 ```
 
-`run.sh` starts the fallback TURN container, builds the app with that run's TURN host, starts the production server on port `3010`, starts the tunnel, and stops all of them when you press `Ctrl+C`.
+`run.sh` starts the OCI TURN VM when configured, waits for SSH, starts coturn, builds the app with that run's TURN host, starts the production server on port `3010`, starts the tunnel, and stops all of them when you press `Ctrl+C`. If OCI is not configured, it falls back to the local Docker coturn container.
 
 ## Testing With Another Person
 
