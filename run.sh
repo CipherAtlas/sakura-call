@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 APP_URL="${APP_URL:-}"
 PORTS_TO_CLEAR=(3010 3011 3012 3013)
-TURN_ENABLED="${TURN_ENABLED:-1}"
+TURN_ENABLED="${TURN_ENABLED:-0}"
 TURN_MODE="${TURN_MODE:-auto}"
 TURN_COMPOSE_FILE="${TURN_COMPOSE_FILE:-docker-compose.turn.yml}"
 TURN_HOST="${TURN_HOST:-auto}"
@@ -370,6 +370,10 @@ for port in "${PORTS_TO_CLEAR[@]}"; do
 done
 
 configure_turn
+
+if [[ "$TURN_ENABLED" == "0" ]]; then
+  echo "TURN relay startup is deferred. Use the host relay button if fallback is needed."
+fi
 
 echo "Building production app..."
 npm run build

@@ -7,11 +7,12 @@ import {
   Leaf,
   Settings,
   Sparkles,
+  TowerControl,
   X
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { LanguageGate } from "@/components/LanguageGate";
 import { UsernameGate } from "@/components/UsernameGate";
 import {
@@ -26,6 +27,62 @@ import {
   t
 } from "@/lib/i18n";
 import { saveRoomCodeForRoom } from "@/lib/roomCode";
+
+type TurnPhase =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "starting-vm"
+  | "waiting-vm"
+  | "waiting-ssh"
+  | "starting-turn"
+  | "ready"
+  | "stopping"
+  | "error";
+
+type TurnStatus = {
+  phase: TurnPhase;
+  progress: number;
+  message: string;
+  host?: string;
+  updatedAt: number;
+};
+
+function isTurnBusy(phase: TurnPhase | undefined) {
+  return (
+    phase === "checking" ||
+    phase === "starting-vm" ||
+    phase === "waiting-vm" ||
+    phase === "waiting-ssh" ||
+    phase === "starting-turn" ||
+    phase === "stopping"
+  );
+}
+
+function turnStatusLabel(language: Language, status: TurnStatus | null) {
+  switch (status?.phase) {
+    case "disabled":
+      return t(language, "turnRelayNotConfigured");
+    case "checking":
+      return t(language, "turnRelayChecking");
+    case "starting-vm":
+      return t(language, "turnRelayStartingVm");
+    case "waiting-vm":
+      return t(language, "turnRelayWaitingVm");
+    case "waiting-ssh":
+      return t(language, "turnRelayWaitingNetwork");
+    case "starting-turn":
+      return t(language, "turnRelayStarting");
+    case "ready":
+      return t(language, "turnRelayReady");
+    case "stopping":
+      return t(language, "turnRelayStopping");
+    case "error":
+      return t(language, "turnRelayError");
+    default:
+      return t(language, "turnRelayOff");
+  }
+}
 
 export default function HomePage() {
   const router = useRouter();
@@ -42,6 +99,8 @@ export default function HomePage() {
   const [roomCode, setRoomCode] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState("");
+  const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
+  const [isTurnActionPending, setIsTurnActionPending] = useState(false);
 
   useEffect(() => {
     setLanguage(getSavedLanguage());
@@ -106,6 +165,98 @@ export default function HomePage() {
       document.body.classList.remove("garden-modal-open");
     };
   }, [showSettings]);
+
+  const loadTurnStatus = useCallback(async () => {
+    const response = await fetch("/api/turn/status", {
+      cache: "no-store",
+      credentials: "include"
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const nextStatus = (await response.json()) as TurnStatus;
+    setTurnStatus(nextStatus);
+    return nextStatus;
+  }, []);
+
+  useEffect(() => {
+    if (!isOwner) {
+      setTurnStatus(null);
+      return;
+    }
+
+    let isActive = true;
+
+    async function pollTurnStatus() {
+      const nextStatus = await loadTurnStatus().catch(() => null);
+
+      if (!isActive || !nextStatus) {
+        return;
+      }
+    }
+
+    void pollTurnStatus();
+    const interval = window.setInterval(() => {
+      if (isTurnBusy(turnStatus?.phase)) {
+        void pollTurnStatus();
+      }
+    }, 2500);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [isOwner, loadTurnStatus, turnStatus?.phase]);
+
+  async function handleStartTurnRelay() {
+    setIsTurnActionPending(true);
+
+    try {
+      const response = await fetch("/api/turn/start", {
+        method: "POST",
+        credentials: "include"
+      });
+
+      if (response.ok) {
+        setTurnStatus((await response.json()) as TurnStatus);
+      } else if (language) {
+        setError(t(language, "turnRelayUnavailable"));
+      }
+    } catch {
+      if (language) {
+        setError(t(language, "turnRelayUnavailable"));
+      }
+    } finally {
+      setIsTurnActionPending(false);
+      void loadTurnStatus();
+    }
+  }
+
+  async function handleStopTurnRelay() {
+    setIsTurnActionPending(true);
+
+    try {
+      const response = await fetch("/api/turn/stop", {
+        method: "POST",
+        credentials: "include"
+      });
+
+      if (response.ok) {
+        setTurnStatus((await response.json()) as TurnStatus);
+      } else if (language) {
+        setError(t(language, "turnRelayUnavailable"));
+      }
+    } catch {
+      if (language) {
+        setError(t(language, "turnRelayUnavailable"));
+      }
+    } finally {
+      setIsTurnActionPending(false);
+      void loadTurnStatus();
+    }
+  }
 
   async function handleCreateRoom() {
     if (!language) {
@@ -287,6 +438,80 @@ export default function HomePage() {
     );
   }
 
+  const turnRelayBusy = isTurnBusy(turnStatus?.phase);
+  const turnRelayReady = turnStatus?.phase === "ready";
+  const turnRelayProgress = Math.max(
+    0,
+    Math.min(100, turnStatus?.progress ?? 0)
+  );
+  const turnRelayPanel = isOwner ? (
+    <section className="settings-modal-section turn-relay-panel">
+      <div className="flex items-start gap-3">
+        <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
+          <TowerControl className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="garden-text-ink text-base font-black">
+              {t(language, "turnRelayTitle")}
+            </h2>
+            <span
+              className={`turn-relay-pill ${
+                turnRelayReady ? "is-ready" : turnRelayBusy ? "is-busy" : ""
+              }`}
+            >
+              {turnStatusLabel(language, turnStatus)}
+            </span>
+          </div>
+          <p className="garden-muted mt-1 text-sm font-bold leading-snug">
+            {turnRelayReady
+              ? t(language, "turnRelayReadyHelp")
+              : t(language, "turnRelayHelp")}
+          </p>
+          <div
+            className="turn-relay-progress mt-3"
+            aria-label={t(language, "turnRelayProgress")}
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={turnRelayProgress}
+            role="progressbar"
+          >
+            <span style={{ width: `${turnRelayProgress}%` }} />
+          </div>
+          {turnStatus?.host ? (
+            <p className="garden-muted mt-2 truncate text-xs font-black">
+              {turnStatus.host}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => void handleStartTurnRelay()}
+          disabled={
+            turnRelayReady ||
+            turnRelayBusy ||
+            isTurnActionPending ||
+            turnStatus?.phase === "disabled"
+          }
+          className="garden-button garden-button-secondary h-12 gap-2 px-4 text-base"
+        >
+          <TowerControl className="h-5 w-5" aria-hidden="true" />
+          {t(language, "startTurnRelay")}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleStopTurnRelay()}
+          disabled={!turnRelayReady || turnRelayBusy || isTurnActionPending}
+          className="garden-button garden-button-quiet h-12 px-4 text-base"
+        >
+          {t(language, "stopTurnRelay")}
+        </button>
+      </div>
+    </section>
+  ) : null;
+
   return (
     <main className="garden-scene safe-bottom min-h-dvh px-5 py-6">
       <section className="mx-auto flex min-h-[calc(100dvh-3rem)] w-full max-w-md flex-col justify-center">
@@ -407,7 +632,7 @@ export default function HomePage() {
           <section
             aria-labelledby="settings-modal-title"
             aria-modal="true"
-            className="settings-modal w-full max-w-sm overflow-hidden"
+            className="settings-modal max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-hidden"
             role="dialog"
             onClick={(event) => event.stopPropagation()}
           >
@@ -435,7 +660,7 @@ export default function HomePage() {
               </button>
             </header>
 
-            <div className="grid gap-4 px-5 pb-5">
+            <div className="settings-modal-content grid gap-4 px-5 pb-5">
               <section className="settings-modal-section">
                 <p className="garden-text-muted text-sm font-black">
                   {t(language, "changeLanguage")}
@@ -497,6 +722,8 @@ export default function HomePage() {
                   </p>
                 ) : null}
               </section>
+
+              {turnRelayPanel}
             </div>
           </section>
         </div>

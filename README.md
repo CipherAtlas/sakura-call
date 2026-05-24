@@ -1,6 +1,6 @@
 # Sakura Call
 
-Sakura Call is a local-development MVP for a private two-person WebRTC audio call with live translated subtitles between English and Japanese.
+Sakura Call is a local-development MVP for a private two-person WebRTC call experience with audio, video, screen sharing, and live translated subtitles between English and Japanese.
 
 The app is built for quick testing with another person over HTTPS using Cloudflare Tunnel. It is not production infrastructure yet.
 
@@ -11,11 +11,11 @@ The app is built for quick testing with another person over HTTPS using Cloudfla
 - Supports English and Japanese only.
 - Gives the room creator a 4-digit room code.
 - Blocks a third participant from joining.
-- Runs peer-to-peer WebRTC audio between the two browsers.
+- Runs peer-to-peer WebRTC audio, video, and screen sharing between the two browsers.
 - Uses Socket.IO for room state, signaling, reconnects, and subtitle events.
 - Captures the local microphone stream, segments speech in the browser, sends short WAV chunks to the server, transcribes them, translates them, and sends translated subtitles to the other participant.
 - Shows the speaker a local preview of what the other participant receives.
-- Keeps video calling dormant for now; the UI is audio-only.
+- Keeps the live conversation/captions area visible during audio, video, and screen-sharing modes.
 - Keeps the OpenAI API key server-side only.
 
 ## Tech Stack
@@ -25,7 +25,7 @@ The app is built for quick testing with another person over HTTPS using Cloudfla
 - TypeScript
 - Tailwind CSS 4
 - Socket.IO
-- WebRTC audio transport
+- WebRTC media transport
 - Web Audio API
 - OpenAI API
 - Cloudflare Tunnel for public HTTPS testing
@@ -111,6 +111,7 @@ NEXT_PUBLIC_TURN_USERNAME=
 NEXT_PUBLIC_TURN_CREDENTIAL=
 NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all
 TURN_MODE=auto
+TURN_ENABLED=0
 OCI_TURN_INSTANCE_ID=
 OCI_TURN_SSH_USER=ubuntu
 OCI_TURN_SSH_KEY_FILE=
@@ -134,11 +135,12 @@ Notes:
 
 - `OPENAI_API_KEY` is required for transcription and translation.
 - `TRANSLATION_MODEL` defaults to `gpt-4o-mini` when unset.
-- Transcription is fixed in code to `gpt-4o-mini-transcribe`.
+- Transcription defaults to `gpt-4o-transcribe`; override with `TRANSCRIPTION_MODEL`.
 - `NEXT_PUBLIC_STUN_URLS` can be a comma-separated list of STUN URLs.
 - `NEXT_PUBLIC_TURN_URLS` can be a comma-separated list of TURN URLs. Set `NEXT_PUBLIC_TURN_USERNAME` and `NEXT_PUBLIC_TURN_CREDENTIAL` with it.
 - `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=relay` forces TURN-only media for testing. Leave it as `all` for normal fallback behavior.
 - `NEXT_PUBLIC_*` TURN credentials are visible to browsers. This is acceptable for private local testing, but use short-lived server-generated TURN credentials before opening the app to untrusted users.
+- `TURN_ENABLED=0` keeps `run.sh` from starting TURN at startup. This is the default so calls try peer-to-peer first; the host relay button starts the OCI TURN VM only when fallback is needed.
 - `TURN_MODE=auto` uses the OCI TURN VM when `OCI_TURN_INSTANCE_ID` is set, otherwise it falls back to the local Docker coturn container.
 - `OCI_TURN_STOP_INSTANCE_ON_EXIT=1` stops the OCI TURN VM when `run.sh` exits, matching the on-demand usage model.
 - `OCI_USER_OCID`, `OCI_FINGERPRINT`, `OCI_TENANCY_OCID`, `OCI_REGION`, and `OCI_PRIVATE_KEY_FILE` are used by `run.sh` to create a temporary OCI CLI config. Lowercase OCI variable names from the Oracle download also work.
@@ -158,13 +160,11 @@ Use this flow for real calls with one other person:
 The script owns the full runtime lifecycle:
 
 1. Clears the local app ports.
-2. Starts the OCI TURN VM when `OCI_TURN_INSTANCE_ID` is configured.
-3. Waits for the VM and SSH to become ready.
-4. Starts coturn on the VM with a per-run TURN password when no password is configured.
-5. Builds the app with the current TURN public IP.
-6. Starts the production app on port `3010`.
-7. Starts the Cloudflare Tunnel for the HTTPS app URL.
-8. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, coturn, and the OCI VM.
+2. Builds the app with peer-to-peer STUN as the default path.
+3. Starts the production app on port `3010`.
+4. Starts the Cloudflare Tunnel for the HTTPS app URL.
+5. Leaves TURN off until the host presses the fallback relay button.
+6. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, and any TURN relay started by the app.
 
 The intended usage is private and temporary: start the script, make the call, then stop the script. Do not leave it running as a public service.
 
@@ -186,7 +186,7 @@ NEXT_PUBLIC_TURN_CREDENTIAL=
 
 For remote callers, `localhost` is not enough. The TURN server must be reachable by both browsers on a public IP or hostname with UDP/TCP `3478` and the relay port range open. When running coturn on a public host, set `TURN_EXTERNAL_IP` to that host's public IP and use that same IP or hostname in `NEXT_PUBLIC_TURN_URLS`.
 
-`run.sh` starts TURN automatically before building the app. With `OCI_TURN_INSTANCE_ID` set, it starts the OCI VM if needed, starts coturn over SSH, exports matching `NEXT_PUBLIC_TURN_URLS`, and stops coturn plus the VM when the script exits. If `TURN_PASSWORD`/`NEXT_PUBLIC_TURN_CREDENTIAL` is unset or left as `change-me`, `run.sh` generates an ephemeral TURN password for that run. Without OCI vars, it uses the local Docker container with `TURN_HOST=auto`. Use `TURN_HOST=localhost TURN_MODE=local ./run.sh` for same-machine testing, or `TURN_ENABLED=0 ./run.sh` to skip TURN.
+`run.sh` does not start TURN automatically. With `OCI_TURN_INSTANCE_ID` set, the host can start the fallback relay from the room UI. The app starts the OCI VM if needed, waits for SSH, starts coturn with a per-run TURN password when no password is configured, and exposes the TURN ICE config to both browsers after the relay is ready. Use `TURN_ENABLED=1 ./run.sh` only for the older startup behavior or local TURN testing.
 
 Cloudflare Tunnel only exposes the HTTP app. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
 
@@ -298,9 +298,9 @@ npm run build         # Build the Next.js app
 6. The server creates a 6-character room ID, 4-digit room code, and host-only creator cookie.
 7. The creator shares the 4-digit room code.
 8. The guest enters the 4-digit room code.
-9. Both users grant microphone permission and are added to the call.
+9. Both users grant the needed media permissions and are added to the call.
 10. Socket.IO joins both participants into the room and exchanges WebRTC offer/answer/ICE signaling.
-11. WebRTC sends audio peer-to-peer where the network allows it.
+11. WebRTC sends audio, video, and screen sharing peer-to-peer where the network allows it.
 12. The host starts the subtitle service.
 13. Each browser captures its own microphone audio, segments speech, and emits audio chunks to the server.
 14. The server transcribes the speaker's audio, renders captions in each viewer's selected language, and sends a preview caption back to the speaker.
@@ -309,19 +309,9 @@ Remote audio is not transcribed. Each browser only submits its own local microph
 
 If the host leaves, the room ends and the remaining participant is removed from the call.
 
-## Video Calling Dormant Mode
+## Meeting UI Scope
 
-The app is intentionally scoped to audio-only UI right now. Video/WebRTC camera logic still exists in the codebase, but it is marked dormant behind `videoCallingEnabled` in `components/CallRoom.tsx`.
-
-If the user says **"enable video calling"**, that means:
-
-- Flip the dormant video path back on.
-- Restore camera permission copy and camera controls.
-- Re-enable camera track acquisition in the media setup flow.
-- Show local/remote video when tracks are present.
-- Keep the audio/subtitle behavior unchanged.
-
-Do not rebuild the feature from scratch; reuse the existing dormant video logic.
+The intended meeting UI supports three modes: audio call, video call, and screen sharing. Keep the private two-person scope, preserve the sakura/garden aesthetic, and ensure the live conversation/captions section remains visible in every mode.
 
 ## Security And Privacy Notes
 
@@ -458,7 +448,7 @@ You can also use the convenience script:
 5. Create a room.
 6. Send the other person the 4-digit room code.
 7. The other person opens the site, chooses their language, enters their name, and enters the code.
-8. Both people allow microphone access and join.
+8. Both people allow the needed media permissions and join.
 9. The host starts the subtitle service.
 10. Speak naturally. The main subtitle area shows the other person's translated speech, and the preview subtitle area shows what your speech looks like after translation.
 
@@ -483,7 +473,7 @@ Costs depend on current model pricing, speech volume, silence, retry behavior, a
 
 This MVP uses:
 
-- `gpt-4o-mini-transcribe` for transcription
+- `gpt-4o-transcribe` by default for transcription
 - `gpt-4o-mini` by default for translation
 
 Plan for API usage before hosting this for real users.
@@ -496,8 +486,9 @@ Plan for API usage before hosting this for real users.
 - Copy the 4-digit code.
 - Join from a second browser or device.
 - Confirm a third participant is blocked.
-- Confirm the UI asks only for microphone access.
-- Confirm microphone denial shows a localized error.
+- Confirm microphone and camera permission flows are clear, localized, and tied to the selected meeting mode.
+- Confirm screen sharing can be started and stopped where the browser supports it.
+- Confirm the conversation/captions section remains visible during audio, video, and screen-sharing states.
 - Confirm English viewers receive English subtitles.
 - Confirm Japanese viewers receive Japanese subtitles.
 - Confirm `npm run lint`, `npm run typecheck`, and `npm run build` pass.

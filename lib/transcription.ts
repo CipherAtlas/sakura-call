@@ -1,7 +1,7 @@
 import OpenAI, { toFile } from "openai";
 import type { Language } from "./i18n";
 
-const transcriptionModel = "gpt-4o-mini-transcribe";
+const defaultTranscriptionModel = "gpt-4o-transcribe";
 const nonEnglishScriptPattern =
   /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/u;
 const hangulScriptPattern = /[\uac00-\ud7af]/u;
@@ -18,6 +18,10 @@ function getOpenAIClient() {
   });
 
   return client;
+}
+
+function getTranscriptionModel() {
+  return process.env.TRANSCRIPTION_MODEL?.trim() || defaultTranscriptionModel;
 }
 
 export function isTranscriptionConfigured() {
@@ -59,7 +63,7 @@ async function transcribeWithPrompt({
 
   const transcription = await getOpenAIClient().audio.transcriptions.create({
     file,
-    model: transcriptionModel,
+    model: getTranscriptionModel(),
     language,
     response_format: "json",
     prompt: transcriptionPrompt(language, strict)

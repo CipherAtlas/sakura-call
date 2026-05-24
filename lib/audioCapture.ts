@@ -28,11 +28,11 @@ type AudioCaptureOptions = {
 };
 
 const outputSampleRate = 16000;
-const silenceThreshold = 0.006;
-const silenceToFinalizeMs = 1100;
-const minSpeechMs = 250;
-const maxUtteranceMs = 8500;
-const preRollMs = 650;
+const silenceThreshold = 0.004;
+const silenceToFinalizeMs = 1500;
+const minSpeechMs = 180;
+const maxUtteranceMs = 12000;
+const preRollMs = 900;
 
 function createSegmentId() {
   return crypto.randomUUID();

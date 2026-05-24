@@ -10,6 +10,7 @@ export type Participant = {
   isHost: boolean;
   joinedAt: number;
   lastSeenAt: number;
+  sessionTokenHash: string;
 };
 
 type FailedAttempts = {
@@ -29,6 +30,7 @@ export type Room = {
 
 const rooms = new Map<string, Room>();
 const roomTtlMs = 4 * 60 * 60 * 1000;
+const participantReconnectTtlMs = 2 * 60 * 1000;
 const maxFailedAttempts = 5;
 const blockMs = 60 * 1000;
 
@@ -55,18 +57,68 @@ function generateUniqueRoomCode() {
   throw new Error("No room codes available");
 }
 
+function generateParticipantSessionToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function hashParticipantSessionToken(token: string) {
+  return crypto.createHash("sha256").update(token).digest("base64url");
+}
+
+function constantTimeEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.byteLength !== rightBuffer.byteLength) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isParticipantSessionToken(
+  participant: Participant | undefined,
+  token: unknown
+) {
+  if (!participant || typeof token !== "string" || !token) {
+    return false;
+  }
+
+  return constantTimeEqual(
+    participant.sessionTokenHash,
+    hashParticipantSessionToken(token)
+  );
+}
+
 function cleanupRooms() {
   const now = Date.now();
 
   for (const [roomId, room] of rooms) {
     if (now - room.createdAt > roomTtlMs) {
       rooms.delete(roomId);
+      continue;
+    }
+
+    for (const participant of room.participants.values()) {
+      if (
+        participant.socketId ||
+        now - participant.lastSeenAt <= participantReconnectTtlMs
+      ) {
+        continue;
+      }
+
+      if (participant.isHost) {
+        rooms.delete(roomId);
+        break;
+      }
+
+      room.participants.delete(participant.participantId);
     }
   }
 }
 
 export function createRoom(spokenLanguage: Language): Room {
-  cleanupRooms();
+  rooms.clear();
 
   let roomId = generateRoomId();
   while (rooms.has(roomId)) {
@@ -120,6 +172,7 @@ export type JoinFailureReason =
   | "INVALID_CODE"
   | "TOO_MANY_ATTEMPTS"
   | "ROOM_FULL"
+  | "INVALID_SESSION"
   | "INVALID_LANGUAGE";
 
 export type JoinResult =
@@ -129,6 +182,7 @@ export type JoinResult =
       otherParticipants: Participant[];
       participantCount: number;
       subtitleServiceStarted: boolean;
+      participantSessionToken: string;
     }
   | {
       ok: false;
@@ -142,6 +196,7 @@ export function joinRoom({
   spokenLanguage,
   displayName,
   roomCode,
+  participantSessionToken,
   socketId,
   isCreator
 }: {
@@ -150,6 +205,7 @@ export function joinRoom({
   spokenLanguage: unknown;
   displayName?: unknown;
   roomCode?: string;
+  participantSessionToken?: unknown;
   socketId: string;
   isCreator: boolean;
 }): JoinResult {
@@ -166,9 +222,18 @@ export function joinRoom({
 
   const alreadyJoined = room.participants.has(participantId);
   const existingParticipant = room.participants.get(participantId);
+  const isSameSocketParticipant = existingParticipant?.socketId === socketId;
+  const hasValidParticipantSession = isParticipantSessionToken(
+    existingParticipant,
+    participantSessionToken
+  );
   const normalizedDisplayName =
     typeof displayName === "string" ? normalizeDisplayName(displayName) : "";
   const attempt = room.failedAttempts.get(participantId);
+
+  if (alreadyJoined && !hasValidParticipantSession && !isSameSocketParticipant) {
+    return { ok: false, reason: "INVALID_SESSION" };
+  }
 
   if (!isCreator && !alreadyJoined) {
     if (attempt && attempt.blockedUntil > now) {
@@ -196,6 +261,12 @@ export function joinRoom({
 
   room.failedAttempts.delete(participantId);
 
+  const nextParticipantSessionToken =
+    existingParticipant &&
+    hasValidParticipantSession &&
+    typeof participantSessionToken === "string"
+      ? participantSessionToken
+      : generateParticipantSessionToken();
   const participant: Participant = {
     participantId,
     displayName:
@@ -206,7 +277,11 @@ export function joinRoom({
     joinedAt: alreadyJoined
       ? existingParticipant?.joinedAt ?? now
       : now,
-    lastSeenAt: now
+    lastSeenAt: now,
+    sessionTokenHash:
+      existingParticipant && hasValidParticipantSession
+        ? existingParticipant.sessionTokenHash
+        : hashParticipantSessionToken(nextParticipantSessionToken)
   };
 
   room.participants.set(participantId, participant);
@@ -220,7 +295,8 @@ export function joinRoom({
     participant,
     otherParticipants,
     participantCount: room.participants.size,
-    subtitleServiceStarted: room.subtitleServiceStarted
+    subtitleServiceStarted: room.subtitleServiceStarted,
+    participantSessionToken: nextParticipantSessionToken
   };
 }
 
@@ -262,6 +338,19 @@ export function leaveRoom(roomId: string, participantId: string) {
   }
 
   room.participants.delete(participantId);
+  return { roomEnded: false, participant };
+}
+
+export function markParticipantDisconnected(roomId: string, participantId: string) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+
+  if (!room || !participant) {
+    return { roomEnded: false, participant: undefined };
+  }
+
+  participant.socketId = undefined;
+  participant.lastSeenAt = Date.now();
   return { roomEnded: false, participant };
 }
 

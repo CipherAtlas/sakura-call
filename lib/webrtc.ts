@@ -33,6 +33,11 @@ function parseIceTransportPolicy(value: string | undefined): RTCIceTransportPoli
   return value === "relay" ? "relay" : "all";
 }
 
+type IceServerResponse = {
+  iceServers: RTCIceServer[];
+  iceTransportPolicy?: RTCIceTransportPolicy;
+};
+
 export function createPeerConnection(): RTCPeerConnection {
   return new RTCPeerConnection({
     iceServers: parseIceServers(),
@@ -40,6 +45,32 @@ export function createPeerConnection(): RTCPeerConnection {
       process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY
     )
   });
+}
+
+export async function refreshPeerConnectionIceServers(
+  peerConnection: RTCPeerConnection
+) {
+  const response = await fetch("/api/ice-servers", {
+    cache: "no-store",
+    credentials: "include"
+  });
+
+  if (!response.ok) {
+    return false;
+  }
+
+  const config = (await response.json()) as IceServerResponse;
+
+  if (!Array.isArray(config.iceServers) || config.iceServers.length === 0) {
+    return false;
+  }
+
+  peerConnection.setConfiguration({
+    ...peerConnection.getConfiguration(),
+    iceServers: config.iceServers,
+    iceTransportPolicy: parseIceTransportPolicy(config.iceTransportPolicy)
+  });
+  return true;
 }
 
 export function addStreamTracks(

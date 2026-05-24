@@ -8,6 +8,7 @@ import {
 } from "../lib/transcription";
 import { translateText } from "../lib/translation";
 import { parseCookies } from "./cookies";
+import { isAllowedOrigin } from "./origin";
 import {
   creatorCookieName,
   findParticipantBySocket,
@@ -15,6 +16,7 @@ import {
   isCreatorSecret,
   joinRoom,
   leaveRoom,
+  markParticipantDisconnected,
   Participant,
   startSubtitleService,
   stopSubtitleService,
@@ -33,9 +35,6 @@ type CaptionEvent = {
 };
 
 type AudioSegmentPayload = {
-  roomId: string;
-  participantId: string;
-  spokenLanguage: "en" | "ja";
   audio: ArrayBuffer | Buffer;
   isFinal: boolean;
   clientSegmentId: string;
@@ -47,6 +46,13 @@ type RateLimitState = {
 };
 
 const rateLimits = new Map<string, RateLimitState>();
+
+type SocketParticipantSession = {
+  roomId: string;
+  participantId: string;
+};
+
+const socketParticipantSessions = new Map<string, SocketParticipantSession>();
 
 function consumeRateLimit(key: string, max: number, windowMs: number) {
   const now = Date.now();
@@ -111,6 +117,56 @@ function emitRoomEnded(io: Server, roomId: string, endedBy: string) {
   void io.in(roomId).socketsLeave(roomId);
 }
 
+function getSocketParticipant(socketId: string) {
+  const session = socketParticipantSessions.get(socketId);
+  const room = session ? getRoom(session.roomId) : undefined;
+  const participant = session
+    ? room?.participants.get(session.participantId)
+    : undefined;
+
+  if (!session || !room || !participant || participant.socketId !== socketId) {
+    socketParticipantSessions.delete(socketId);
+    return null;
+  }
+
+  return { room, participant, session };
+}
+
+function publicParticipant(participant: Participant) {
+  return {
+    participantId: participant.participantId,
+    displayName: participant.displayName,
+    spokenLanguage: participant.spokenLanguage,
+    isHost: participant.isHost,
+    joinedAt: participant.joinedAt,
+    lastSeenAt: participant.lastSeenAt
+  };
+}
+
+function emitAuthorizedPeerEvent(
+  io: Server,
+  socketId: string,
+  event: string,
+  payload: Record<string, unknown>
+) {
+  const match = getSocketParticipant(socketId);
+  if (!match) {
+    return;
+  }
+
+  emitToOtherParticipant(
+    io,
+    match.room.roomId,
+    match.participant.participantId,
+    event,
+    {
+      ...payload,
+      roomId: match.room.roomId,
+      from: match.participant.participantId
+    }
+  );
+}
+
 async function captionTextForLanguage({
   originalText,
   originalLanguage,
@@ -164,8 +220,13 @@ export function createSignalingServer(httpServer: HttpServer) {
   const io = new Server(httpServer, {
     path: "/socket.io",
     cors: {
-      origin: true,
+      origin: (origin, callback) => {
+        callback(null, isAllowedOrigin(origin));
+      },
       credentials: true
+    },
+    allowRequest: (request, callback) => {
+      callback(null, isAllowedOrigin(request.headers.origin));
     },
     maxHttpBufferSize: 1_000_000
   });
@@ -191,6 +252,7 @@ export function createSignalingServer(httpServer: HttpServer) {
         displayName: payload?.displayName,
         spokenLanguage: payload?.spokenLanguage,
         roomCode: payload?.roomCode,
+        participantSessionToken: payload?.participantSessionToken,
         socketId: socket.id,
         isCreator
       });
@@ -201,13 +263,18 @@ export function createSignalingServer(httpServer: HttpServer) {
       }
 
       socket.join(roomId);
+      socketParticipantSessions.set(socket.id, {
+        roomId,
+        participantId
+      });
       callback?.({
         ok: true,
-        participant: result.participant,
-        otherParticipants: result.otherParticipants,
+        participant: publicParticipant(result.participant),
+        otherParticipants: result.otherParticipants.map(publicParticipant),
         participantCount: result.participantCount,
         isCreator: result.participant.isHost,
-        subtitleServiceStarted: result.subtitleServiceStarted
+        subtitleServiceStarted: result.subtitleServiceStarted,
+        participantSessionToken: result.participantSessionToken
       });
 
       emitToOtherParticipant(io, roomId, participantId, "peer:joined", {
@@ -218,9 +285,8 @@ export function createSignalingServer(httpServer: HttpServer) {
       emitRoomStatus(io, roomId);
     });
 
-    socket.on("subtitle:start-service", (payload, callback) => {
-      const roomId = String(payload?.roomId ?? "");
-      const participantId = String(payload?.participantId ?? "");
+    socket.on("subtitle:start-service", (_payload, callback) => {
+      const match = getSocketParticipant(socket.id);
 
       if (!consumeRateLimit(`subtitle:start:${socket.id}`, 8, 60_000)) {
         callback?.({ ok: false, reason: "RATE_LIMITED" });
@@ -232,67 +298,93 @@ export function createSignalingServer(httpServer: HttpServer) {
         return;
       }
 
-      if (!startSubtitleService(roomId, participantId)) {
+      if (
+        !match ||
+        !startSubtitleService(match.room.roomId, match.participant.participantId)
+      ) {
         callback?.({ ok: false, reason: "HOST_ONLY" });
         return;
       }
 
-      io.to(roomId).emit("subtitle:service-started", {
-        roomId,
-        startedBy: participantId
+      io.to(match.room.roomId).emit("subtitle:service-started", {
+        roomId: match.room.roomId,
+        startedBy: match.participant.participantId
       });
       callback?.({ ok: true });
     });
 
-    socket.on("subtitle:stop-service", (payload, callback) => {
-      const roomId = String(payload?.roomId ?? "");
-      const participantId = String(payload?.participantId ?? "");
+    socket.on("subtitle:stop-service", (_payload, callback) => {
+      const match = getSocketParticipant(socket.id);
 
       if (!consumeRateLimit(`subtitle:stop:${socket.id}`, 8, 60_000)) {
         callback?.({ ok: false, reason: "RATE_LIMITED" });
         return;
       }
 
-      if (!stopSubtitleService(roomId, participantId)) {
+      if (
+        !match ||
+        !stopSubtitleService(match.room.roomId, match.participant.participantId)
+      ) {
         callback?.({ ok: false, reason: "HOST_ONLY" });
         return;
       }
 
-      io.to(roomId).emit("subtitle:service-stopped", {
-        roomId,
-        stoppedBy: participantId
+      io.to(match.room.roomId).emit("subtitle:service-stopped", {
+        roomId: match.room.roomId,
+        stoppedBy: match.participant.participantId
       });
       callback?.({ ok: true });
     });
 
     socket.on("participant:language", (payload) => {
-      const roomId = String(payload?.roomId ?? "");
-      const participantId = String(payload?.participantId ?? "");
+      const match = getSocketParticipant(socket.id);
       const spokenLanguage = payload?.spokenLanguage;
 
-      if (!isSupportedLanguage(spokenLanguage)) {
+      if (!match || !isSupportedLanguage(spokenLanguage)) {
         return;
       }
 
-      updateParticipantLanguage(roomId, participantId, spokenLanguage);
+      updateParticipantLanguage(
+        match.room.roomId,
+        match.participant.participantId,
+        spokenLanguage
+      );
     });
 
     socket.on("webrtc:offer", (payload) => {
-      emitToOtherParticipant(io, String(payload?.roomId ?? ""), String(payload?.from ?? ""), "webrtc:offer", payload);
+      emitAuthorizedPeerEvent(io, socket.id, "webrtc:offer", {
+        description: payload?.description
+      });
     });
 
     socket.on("webrtc:answer", (payload) => {
-      emitToOtherParticipant(io, String(payload?.roomId ?? ""), String(payload?.from ?? ""), "webrtc:answer", payload);
+      emitAuthorizedPeerEvent(io, socket.id, "webrtc:answer", {
+        description: payload?.description
+      });
     });
 
     socket.on("webrtc:ice-candidate", (payload) => {
-      emitToOtherParticipant(
-        io,
-        String(payload?.roomId ?? ""),
-        String(payload?.from ?? ""),
-        "webrtc:ice-candidate",
-        payload
-      );
+      emitAuthorizedPeerEvent(io, socket.id, "webrtc:ice-candidate", {
+        candidate: payload?.candidate
+      });
+    });
+
+    socket.on("media:screen-started", (payload) => {
+      emitAuthorizedPeerEvent(io, socket.id, "media:screen-started", {
+        streamId: payload?.streamId
+      });
+    });
+
+    socket.on("media:screen-stopped", () => {
+      emitAuthorizedPeerEvent(io, socket.id, "media:screen-stopped", {});
+    });
+
+    socket.on("media:camera-started", () => {
+      emitAuthorizedPeerEvent(io, socket.id, "media:camera-started", {});
+    });
+
+    socket.on("media:camera-stopped", () => {
+      emitAuthorizedPeerEvent(io, socket.id, "media:camera-stopped", {});
     });
 
     socket.on("audio:segment", async (payload: AudioSegmentPayload) => {
@@ -300,10 +392,11 @@ export function createSignalingServer(httpServer: HttpServer) {
         return;
       }
 
-      const room = getRoom(payload.roomId);
-      const participant = room?.participants.get(payload.participantId);
+      const match = getSocketParticipant(socket.id);
+      const room = match?.room;
+      const participant = match?.participant;
 
-      if (!room || !participant || participant.socketId !== socket.id) {
+      if (!room || !participant) {
         return;
       }
 
@@ -349,7 +442,7 @@ export function createSignalingServer(httpServer: HttpServer) {
           }
 
           const caption = buildCaption({
-            roomId: payload.roomId,
+            roomId: room.roomId,
             speaker: participant,
             originalText,
             translatedLanguage: recipient.spokenLanguage,
@@ -368,10 +461,17 @@ export function createSignalingServer(httpServer: HttpServer) {
       }
     });
 
-    socket.on("room:leave", (payload) => {
-      const roomId = String(payload?.roomId ?? "");
-      const participantId = String(payload?.participantId ?? "");
+    socket.on("room:leave", () => {
+      const match = getSocketParticipant(socket.id);
+      if (!match) {
+        return;
+      }
+
+      const { room, participant } = match;
+      const roomId = room.roomId;
+      const participantId = participant.participantId;
       const leaveResult = leaveRoom(roomId, participantId);
+      socketParticipantSessions.delete(socket.id);
 
       if (leaveResult.roomEnded) {
         emitRoomEnded(io, roomId, participantId);
@@ -388,15 +488,15 @@ export function createSignalingServer(httpServer: HttpServer) {
     socket.on("disconnect", () => {
       const match = findParticipantBySocket(socket.id);
       if (!match) {
+        socketParticipantSessions.delete(socket.id);
         return;
       }
 
-      const leaveResult = leaveRoom(match.room.roomId, match.participant.participantId);
-
-      if (leaveResult.roomEnded) {
-        emitRoomEnded(io, match.room.roomId, match.participant.participantId);
-        return;
-      }
+      markParticipantDisconnected(
+        match.room.roomId,
+        match.participant.participantId
+      );
+      socketParticipantSessions.delete(socket.id);
 
       emitToOtherParticipant(
         io,

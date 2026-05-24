@@ -1,0 +1,3693 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "japanese-english-comms",
+    "languages": [
+      "config",
+      "css",
+      "javascript",
+      "json",
+      "markdown",
+      "shell",
+      "typescript",
+      "yaml"
+    ],
+    "frameworks": [
+      "Docker Compose",
+      "Next.js",
+      "OpenAI API",
+      "React",
+      "Socket.IO",
+      "Tailwind CSS"
+    ],
+    "description": "Sakura Call is a private two-person Next.js WebRTC audio calling tool with English/Japanese transcription and translated subtitles, designed for on-demand local public testing through Cloudflare Tunnel and direct TURN fallback.",
+    "analyzedAt": "2026-05-22T11:00:16.196Z",
+    "gitCommitHash": "2a488ba07058855fc4f33394578e5166463868a1"
+  },
+  "nodes": [
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "Lists required runtime, TURN, OCI, Cloudflare, and owner-session environment variables without exposing local secrets.",
+      "tags": [
+        "configuration",
+        "environment",
+        "runtime-settings"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:AGENTS.md",
+      "type": "document",
+      "name": "AGENTS.md",
+      "filePath": "AGENTS.md",
+      "summary": "Documents project-specific agent constraints, including the private two-person audio-only product scope and on-demand runtime assumptions.",
+      "tags": [
+        "documentation",
+        "project-guidance",
+        "constraints"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/globals.css",
+      "type": "file",
+      "name": "globals.css",
+      "filePath": "app/globals.css",
+      "summary": "Defines the Tailwind CSS 4 theme, responsive layout primitives, animation utilities, and visual treatment for the call UI.",
+      "tags": [
+        "nextjs",
+        "route",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/layout.tsx",
+      "type": "file",
+      "name": "layout.tsx",
+      "filePath": "app/layout.tsx",
+      "summary": "Provides the root Next.js layout, metadata, viewport settings, and global stylesheet import for the application.",
+      "tags": [
+        "nextjs",
+        "route",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/layout.tsx:RootLayout",
+      "type": "function",
+      "name": "RootLayout",
+      "filePath": "app/layout.tsx",
+      "lineRange": [
+        20,
+        30
+      ],
+      "summary": "Implements RootLayout behavior for layout.tsx.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/page.tsx",
+      "type": "file",
+      "name": "page.tsx",
+      "filePath": "app/page.tsx",
+      "summary": "Implements the host landing and join flow for language selection, display names, owner unlock, room creation, and four-digit room code entry.",
+      "tags": [
+        "nextjs",
+        "route",
+        "ui"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:app/page.tsx:HomePage",
+      "type": "function",
+      "name": "HomePage",
+      "filePath": "app/page.tsx",
+      "lineRange": [
+        30,
+        506
+      ],
+      "summary": "Coordinates the entry experience for owner unlock, language/name collection, room creation, room-code validation, and navigation into the call room.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:app/robots.ts",
+      "type": "file",
+      "name": "robots.ts",
+      "filePath": "app/robots.ts",
+      "summary": "Defines a restrictive robots policy so crawlers do not index the private call tool.",
+      "tags": [
+        "nextjs",
+        "route",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/robots.ts:robots",
+      "type": "function",
+      "name": "robots",
+      "filePath": "app/robots.ts",
+      "lineRange": [
+        3,
+        10
+      ],
+      "summary": "Implements robots behavior for robots.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:app/room/[roomId]/page.tsx",
+      "type": "file",
+      "name": "page.tsx",
+      "filePath": "app/room/[roomId]/page.tsx",
+      "summary": "Loads the call room route and delegates the room experience to the client-side CallRoom component.",
+      "tags": [
+        "nextjs",
+        "route",
+        "ui"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:app/room/[roomId]/page.tsx:RoomPage",
+      "type": "function",
+      "name": "RoomPage",
+      "filePath": "app/room/[roomId]/page.tsx",
+      "lineRange": [
+        3,
+        11
+      ],
+      "summary": "Implements RoomPage behavior for page.tsx.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:components/CallRoom.tsx",
+      "type": "file",
+      "name": "CallRoom.tsx",
+      "filePath": "components/CallRoom.tsx",
+      "summary": "Implements the full in-room call experience: microphone permission, Socket.IO signaling, WebRTC audio, speech segmentation, translated subtitles, reconnect state, and dormant video plumbing.",
+      "tags": [
+        "component",
+        "webrtc",
+        "subtitles",
+        "signaling"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:stopSpeakingMonitor",
+      "type": "function",
+      "name": "stopSpeakingMonitor",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        86,
+        103
+      ],
+      "summary": "Implements stopSpeakingMonitor behavior for CallRoom.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:startSpeakingMonitor",
+      "type": "function",
+      "name": "startSpeakingMonitor",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        105,
+        201
+      ],
+      "summary": "Implements startSpeakingMonitor behavior for CallRoom.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:getSessionParticipantId",
+      "type": "function",
+      "name": "getSessionParticipantId",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        229,
+        240
+      ],
+      "summary": "Computes getSessionParticipantId state used by CallRoom.tsx without mutating broader application state.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:errorForJoinReason",
+      "type": "function",
+      "name": "errorForJoinReason",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        242,
+        260
+      ],
+      "summary": "Implements errorForJoinReason behavior for CallRoom.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:appendCaptionLog",
+      "type": "function",
+      "name": "appendCaptionLog",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        269,
+        278
+      ],
+      "summary": "Implements appendCaptionLog behavior for CallRoom.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:components/CallRoom.tsx:CallRoom",
+      "type": "function",
+      "name": "CallRoom",
+      "filePath": "components/CallRoom.tsx",
+      "lineRange": [
+        280,
+        1680
+      ],
+      "summary": "Coordinates microphone setup, Socket.IO room membership, WebRTC peer state, caption logging, translation preview, reconnection, and cleanup for one room.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:components/LanguageGate.tsx",
+      "type": "file",
+      "name": "LanguageGate.tsx",
+      "filePath": "components/LanguageGate.tsx",
+      "summary": "Renders the English/Japanese language choice used before entering the room flow.",
+      "tags": [
+        "component",
+        "ui",
+        "call-flow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:components/LanguageGate.tsx:LanguageGate",
+      "type": "function",
+      "name": "LanguageGate",
+      "filePath": "components/LanguageGate.tsx",
+      "lineRange": [
+        7,
+        41
+      ],
+      "summary": "Implements LanguageGate behavior for LanguageGate.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:components/SubtitlesPanel.tsx",
+      "type": "file",
+      "name": "SubtitlesPanel.tsx",
+      "filePath": "components/SubtitlesPanel.tsx",
+      "summary": "Displays live partial captions, final translated captions, and caption history for both local preview and received subtitles.",
+      "tags": [
+        "component",
+        "ui",
+        "call-flow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:components/SubtitlesPanel.tsx:SubtitlesPanel",
+      "type": "function",
+      "name": "SubtitlesPanel",
+      "filePath": "components/SubtitlesPanel.tsx",
+      "lineRange": [
+        26,
+        130
+      ],
+      "summary": "Implements SubtitlesPanel behavior for SubtitlesPanel.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:components/UsernameGate.tsx",
+      "type": "file",
+      "name": "UsernameGate.tsx",
+      "filePath": "components/UsernameGate.tsx",
+      "summary": "Collects and validates the participant display name before continuing into room creation or joining.",
+      "tags": [
+        "component",
+        "ui",
+        "call-flow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:components/UsernameGate.tsx:UsernameGate",
+      "type": "function",
+      "name": "UsernameGate",
+      "filePath": "components/UsernameGate.tsx",
+      "lineRange": [
+        9,
+        84
+      ],
+      "summary": "Implements UsernameGate behavior for UsernameGate.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:components/VideoGrid.tsx",
+      "type": "file",
+      "name": "VideoGrid.tsx",
+      "filePath": "components/VideoGrid.tsx",
+      "summary": "Renders local and remote participant panels with speaking state, audio-only status, and dormant video element support.",
+      "tags": [
+        "component",
+        "ui",
+        "call-flow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:components/VideoGrid.tsx:VideoGrid",
+      "type": "function",
+      "name": "VideoGrid",
+      "filePath": "components/VideoGrid.tsx",
+      "lineRange": [
+        8,
+        121
+      ],
+      "summary": "Implements VideoGrid behavior for VideoGrid.tsx.",
+      "tags": [
+        "component",
+        "event-handler",
+        "state-management"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:docker-compose.turn.yml",
+      "type": "service",
+      "name": "docker-compose.turn.yml",
+      "filePath": "docker-compose.turn.yml",
+      "summary": "Defines a local coturn fallback container with TURN ports and relay range exposed for same-machine or reachable-host testing.",
+      "tags": [
+        "infrastructure",
+        "turn-relay",
+        "containerization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:eslint.config.mjs",
+      "type": "file",
+      "name": "eslint.config.mjs",
+      "filePath": "eslint.config.mjs",
+      "summary": "Configures ESLint with Next.js core web vitals and TypeScript rules while excluding generated build artifacts.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "tooling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/audioCapture.ts",
+      "type": "file",
+      "name": "audioCapture.ts",
+      "filePath": "lib/audioCapture.ts",
+      "summary": "Segments microphone audio in the browser, downsamples it, encodes short WAV payloads, and emits partial/final speech chunks for transcription.",
+      "tags": [
+        "audio",
+        "browser-media",
+        "utility"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:floatTo16BitPcm",
+      "type": "function",
+      "name": "floatTo16BitPcm",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        41,
+        50
+      ],
+      "summary": "Implements floatTo16BitPcm behavior for audioCapture.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:downsample",
+      "type": "function",
+      "name": "downsample",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        52,
+        76
+      ],
+      "summary": "Implements downsample behavior for audioCapture.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:calculateRms",
+      "type": "function",
+      "name": "calculateRms",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        78,
+        91
+      ],
+      "summary": "Implements calculateRms behavior for audioCapture.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:mergePcm",
+      "type": "function",
+      "name": "mergePcm",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        93,
+        104
+      ],
+      "summary": "Implements mergePcm behavior for audioCapture.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:encodeWav",
+      "type": "function",
+      "name": "encodeWav",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        106,
+        137
+      ],
+      "summary": "Implements encodeWav behavior for audioCapture.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioCapture.ts:createAudioCapture",
+      "type": "function",
+      "name": "createAudioCapture",
+      "filePath": "lib/audioCapture.ts",
+      "lineRange": [
+        139,
+        278
+      ],
+      "summary": "Creates a microphone segmentation pipeline that buffers PCM chunks, detects speech/silence, and emits WAV segments for transcription.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:lib/audioEnhancement.ts",
+      "type": "file",
+      "name": "audioEnhancement.ts",
+      "filePath": "lib/audioEnhancement.ts",
+      "summary": "Builds an enhanced microphone stream with Web Audio filters, compression, and a soft noise gate, falling back safely when processing fails.",
+      "tags": [
+        "audio",
+        "browser-media",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:lib/audioEnhancement.ts:calculateRms",
+      "type": "function",
+      "name": "calculateRms",
+      "filePath": "lib/audioEnhancement.ts",
+      "lineRange": [
+        11,
+        24
+      ],
+      "summary": "Implements calculateRms behavior for audioEnhancement.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioEnhancement.ts:createSoftNoiseGate",
+      "type": "function",
+      "name": "createSoftNoiseGate",
+      "filePath": "lib/audioEnhancement.ts",
+      "lineRange": [
+        26,
+        61
+      ],
+      "summary": "Implements createSoftNoiseGate behavior for audioEnhancement.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioEnhancement.ts:createFallback",
+      "type": "function",
+      "name": "createFallback",
+      "filePath": "lib/audioEnhancement.ts",
+      "lineRange": [
+        63,
+        72
+      ],
+      "summary": "Implements createFallback behavior for audioEnhancement.ts.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/audioEnhancement.ts:createEnhancedMicrophoneStream",
+      "type": "function",
+      "name": "createEnhancedMicrophoneStream",
+      "filePath": "lib/audioEnhancement.ts",
+      "lineRange": [
+        74,
+        148
+      ],
+      "summary": "Applies browser audio processing to a raw microphone stream and returns a processed stream with cleanup hooks.",
+      "tags": [
+        "audio",
+        "signal-processing",
+        "utility"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:lib/i18n.ts",
+      "type": "file",
+      "name": "i18n.ts",
+      "filePath": "lib/i18n.ts",
+      "summary": "Centralizes supported-language helpers, browser storage helpers, display-name normalization, and English/Japanese UI copy.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:lib/i18n.ts:languageLabel",
+      "type": "function",
+      "name": "languageLabel",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        5,
+        6
+      ],
+      "summary": "Implements languageLabel behavior for i18n.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:isSupportedLanguage",
+      "type": "function",
+      "name": "isSupportedLanguage",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        8,
+        10
+      ],
+      "summary": "Computes isSupportedLanguage state used by i18n.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:oppositeLanguage",
+      "type": "function",
+      "name": "oppositeLanguage",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        12,
+        14
+      ],
+      "summary": "Implements oppositeLanguage behavior for i18n.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:getSavedLanguage",
+      "type": "function",
+      "name": "getSavedLanguage",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        19,
+        26
+      ],
+      "summary": "Computes getSavedLanguage state used by i18n.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:saveLanguage",
+      "type": "function",
+      "name": "saveLanguage",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        28,
+        32
+      ],
+      "summary": "Updates browser storage state used by the language, display-name, or room-code flow.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:clearSavedLanguage",
+      "type": "function",
+      "name": "clearSavedLanguage",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        34,
+        38
+      ],
+      "summary": "Updates browser storage state used by the language, display-name, or room-code flow.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:normalizeDisplayName",
+      "type": "function",
+      "name": "normalizeDisplayName",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        40,
+        42
+      ],
+      "summary": "Implements normalizeDisplayName behavior for i18n.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:getSavedDisplayName",
+      "type": "function",
+      "name": "getSavedDisplayName",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        44,
+        52
+      ],
+      "summary": "Computes getSavedDisplayName state used by i18n.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:saveDisplayName",
+      "type": "function",
+      "name": "saveDisplayName",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        54,
+        61
+      ],
+      "summary": "Updates browser storage state used by the language, display-name, or room-code flow.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:clearSavedDisplayName",
+      "type": "function",
+      "name": "clearSavedDisplayName",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        63,
+        67
+      ],
+      "summary": "Updates browser storage state used by the language, display-name, or room-code flow.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/i18n.ts:t",
+      "type": "function",
+      "name": "t",
+      "filePath": "lib/i18n.ts",
+      "lineRange": [
+        258,
+        260
+      ],
+      "summary": "Implements t behavior for i18n.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/roomCode.ts",
+      "type": "file",
+      "name": "roomCode.ts",
+      "filePath": "lib/roomCode.ts",
+      "summary": "Persists and retrieves four-digit room codes in browser session storage on a per-room basis.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/roomCode.ts:roomCodeStorageKey",
+      "type": "function",
+      "name": "roomCodeStorageKey",
+      "filePath": "lib/roomCode.ts",
+      "lineRange": [
+        1,
+        3
+      ],
+      "summary": "Implements roomCodeStorageKey behavior for roomCode.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/roomCode.ts:saveRoomCodeForRoom",
+      "type": "function",
+      "name": "saveRoomCodeForRoom",
+      "filePath": "lib/roomCode.ts",
+      "lineRange": [
+        5,
+        9
+      ],
+      "summary": "Updates browser storage state used by the language, display-name, or room-code flow.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/roomCode.ts:getSavedRoomCodeForRoom",
+      "type": "function",
+      "name": "getSavedRoomCodeForRoom",
+      "filePath": "lib/roomCode.ts",
+      "lineRange": [
+        11,
+        17
+      ],
+      "summary": "Computes getSavedRoomCodeForRoom state used by roomCode.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/socket.ts",
+      "type": "file",
+      "name": "socket.ts",
+      "filePath": "lib/socket.ts",
+      "summary": "Creates and caches the Socket.IO client configured for websocket transport and manual connection control.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/socket.ts:getSocket",
+      "type": "function",
+      "name": "getSocket",
+      "filePath": "lib/socket.ts",
+      "lineRange": [
+        7,
+        22
+      ],
+      "summary": "Computes getSocket state used by socket.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/transcription.ts",
+      "type": "file",
+      "name": "transcription.ts",
+      "filePath": "lib/transcription.ts",
+      "summary": "Wraps server-side OpenAI audio transcription with language-specific prompts, strict/fallback retry behavior, and configuration checks.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:lib/transcription.ts:getOpenAIClient",
+      "type": "function",
+      "name": "getOpenAIClient",
+      "filePath": "lib/transcription.ts",
+      "lineRange": [
+        11,
+        21
+      ],
+      "summary": "Computes getOpenAIClient state used by transcription.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/transcription.ts:isTranscriptionConfigured",
+      "type": "function",
+      "name": "isTranscriptionConfigured",
+      "filePath": "lib/transcription.ts",
+      "lineRange": [
+        23,
+        25
+      ],
+      "summary": "Computes isTranscriptionConfigured state used by transcription.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/transcription.ts:transcriptionPrompt",
+      "type": "function",
+      "name": "transcriptionPrompt",
+      "filePath": "lib/transcription.ts",
+      "lineRange": [
+        27,
+        37
+      ],
+      "summary": "Implements transcriptionPrompt behavior for transcription.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/transcription.ts:transcribeWithPrompt",
+      "type": "function",
+      "name": "transcribeWithPrompt",
+      "filePath": "lib/transcription.ts",
+      "lineRange": [
+        47,
+        69
+      ],
+      "summary": "Implements transcribeWithPrompt behavior for transcription.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/transcription.ts:transcribeSpeech",
+      "type": "function",
+      "name": "transcribeSpeech",
+      "filePath": "lib/transcription.ts",
+      "lineRange": [
+        71,
+        103
+      ],
+      "summary": "Runs OpenAI transcription for a speech segment and retries with stricter prompting when final text appears to use the wrong script.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/translation.ts",
+      "type": "file",
+      "name": "translation.ts",
+      "filePath": "lib/translation.ts",
+      "summary": "Translates text between English and Japanese through the server-side OpenAI chat API.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/translation.ts:getOpenAIClient",
+      "type": "function",
+      "name": "getOpenAIClient",
+      "filePath": "lib/translation.ts",
+      "lineRange": [
+        11,
+        21
+      ],
+      "summary": "Computes getOpenAIClient state used by translation.ts without mutating broader application state.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/translation.ts:translateText",
+      "type": "function",
+      "name": "translateText",
+      "filePath": "lib/translation.ts",
+      "lineRange": [
+        27,
+        56
+      ],
+      "summary": "Requests an English/Japanese translation from OpenAI and returns trimmed translated text.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:lib/webrtc.ts",
+      "type": "file",
+      "name": "webrtc.ts",
+      "filePath": "lib/webrtc.ts",
+      "summary": "Builds WebRTC peer connections from STUN/TURN environment settings and provides helpers for stream track lifecycle cleanup.",
+      "tags": [
+        "utility",
+        "runtime",
+        "shared"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:lib/webrtc.ts:parseIceServers",
+      "type": "function",
+      "name": "parseIceServers",
+      "filePath": "lib/webrtc.ts",
+      "lineRange": [
+        12,
+        30
+      ],
+      "summary": "Parses ice servers data into the internal format used by webrtc.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/webrtc.ts:createPeerConnection",
+      "type": "function",
+      "name": "createPeerConnection",
+      "filePath": "lib/webrtc.ts",
+      "lineRange": [
+        36,
+        43
+      ],
+      "summary": "Implements createPeerConnection behavior for webrtc.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/webrtc.ts:addStreamTracks",
+      "type": "function",
+      "name": "addStreamTracks",
+      "filePath": "lib/webrtc.ts",
+      "lineRange": [
+        45,
+        58
+      ],
+      "summary": "Implements addStreamTracks behavior for webrtc.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:lib/webrtc.ts:closePeerConnection",
+      "type": "function",
+      "name": "closePeerConnection",
+      "filePath": "lib/webrtc.ts",
+      "lineRange": [
+        60,
+        66
+      ],
+      "summary": "Implements closePeerConnection behavior for webrtc.ts.",
+      "tags": [
+        "utility",
+        "helper",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:next-env.d.ts",
+      "type": "file",
+      "name": "next-env.d.ts",
+      "filePath": "next-env.d.ts",
+      "summary": "Provides Next.js generated TypeScript declarations required by the app type system.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "tooling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:next.config.ts",
+      "type": "file",
+      "name": "next.config.ts",
+      "filePath": "next.config.ts",
+      "summary": "Defines the Next.js configuration object for the application.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "tooling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "package.json",
+      "summary": "Declares the Next.js, React, Socket.IO, OpenAI, Tailwind, TypeScript, lint, build, dev, and tunnel scripts for the project.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "runtime-settings"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:postcss.config.mjs",
+      "type": "file",
+      "name": "postcss.config.mjs",
+      "filePath": "postcss.config.mjs",
+      "summary": "Configures PostCSS to load the Tailwind CSS 4 plugin.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "tooling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "Explains Sakura Call’s private two-person WebRTC audio translation workflow, local setup, on-demand runtime, TURN fallback, and Cloudflare Tunnel deployment notes.",
+      "tags": [
+        "documentation",
+        "overview",
+        "runtime-guide"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:run.sh",
+      "type": "file",
+      "name": "run.sh",
+      "filePath": "run.sh",
+      "summary": "Orchestrates the on-demand runtime: clears ports, configures OCI or local TURN, builds with current TURN settings, starts the app and Cloudflare Tunnel, and tears everything down on exit.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "deployment"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:run.sh:cleanup",
+      "type": "function",
+      "name": "cleanup",
+      "filePath": "run.sh",
+      "lineRange": [
+        27,
+        56
+      ],
+      "summary": "Implements cleanup behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:stop_port_processes",
+      "type": "function",
+      "name": "stop_port_processes",
+      "filePath": "run.sh",
+      "lineRange": [
+        71,
+        96
+      ],
+      "summary": "Implements stop_port_processes behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:env_file_value",
+      "type": "function",
+      "name": "env_file_value",
+      "filePath": "run.sh",
+      "lineRange": [
+        98,
+        107
+      ],
+      "summary": "Implements env_file_value behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:write_oci_config",
+      "type": "function",
+      "name": "write_oci_config",
+      "filePath": "run.sh",
+      "lineRange": [
+        130,
+        158
+      ],
+      "summary": "Implements write_oci_config behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:oci_instance_public_ip",
+      "type": "function",
+      "name": "oci_instance_public_ip",
+      "filePath": "run.sh",
+      "lineRange": [
+        160,
+        173
+      ],
+      "summary": "Implements oci_instance_public_ip behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:wait_for_oci_instance",
+      "type": "function",
+      "name": "wait_for_oci_instance",
+      "filePath": "run.sh",
+      "lineRange": [
+        175,
+        194
+      ],
+      "summary": "Implements wait_for_oci_instance behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:wait_for_ssh",
+      "type": "function",
+      "name": "wait_for_ssh",
+      "filePath": "run.sh",
+      "lineRange": [
+        196,
+        216
+      ],
+      "summary": "Implements wait_for_ssh behavior for run.sh.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:configure_oci_turn",
+      "type": "function",
+      "name": "configure_oci_turn",
+      "filePath": "run.sh",
+      "lineRange": [
+        218,
+        280
+      ],
+      "summary": "Starts and configures the OCI coturn service with per-run credentials and public IP discovery.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:run.sh:configure_turn",
+      "type": "function",
+      "name": "configure_turn",
+      "filePath": "run.sh",
+      "lineRange": [
+        282,
+        346
+      ],
+      "summary": "Selects and configures OCI or local TURN settings for the current run before the app build starts.",
+      "tags": [
+        "script",
+        "runtime-orchestration",
+        "turn-relay"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:scripts/cloudflare-tunnel.mjs",
+      "type": "file",
+      "name": "cloudflare-tunnel.mjs",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "summary": "Creates or updates the Cloudflare Tunnel, DNS route, and runtime token used to expose the local HTTP app over HTTPS.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "tooling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:parseEnvFile",
+      "type": "function",
+      "name": "parseEnvFile",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        25,
+        59
+      ],
+      "summary": "Parses env file data into the internal format used by cloudflare-tunnel.mjs.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:cloudflare",
+      "type": "function",
+      "name": "cloudflare",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        61,
+        86
+      ],
+      "summary": "Implements cloudflare behavior for cloudflare-tunnel.mjs.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:ensureTunnel",
+      "type": "function",
+      "name": "ensureTunnel",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        98,
+        113
+      ],
+      "summary": "Implements ensureTunnel behavior for cloudflare-tunnel.mjs.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:configureTunnel",
+      "type": "function",
+      "name": "configureTunnel",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        115,
+        136
+      ],
+      "summary": "Implements configureTunnel behavior for cloudflare-tunnel.mjs.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:replaceDnsRecord",
+      "type": "function",
+      "name": "replaceDnsRecord",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        138,
+        160
+      ],
+      "summary": "Implements replaceDnsRecord behavior for cloudflare-tunnel.mjs.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:setup",
+      "type": "function",
+      "name": "setup",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        166,
+        197
+      ],
+      "summary": "Creates or updates the Cloudflare tunnel, DNS route, and local run instructions.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:scripts/cloudflare-tunnel.mjs:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "scripts/cloudflare-tunnel.mjs",
+      "lineRange": [
+        199,
+        214
+      ],
+      "summary": "Runs cloudflared with the configured tunnel token and service URL.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "deployment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:server/cookies.ts",
+      "type": "file",
+      "name": "cookies.ts",
+      "filePath": "server/cookies.ts",
+      "summary": "Parses HTTP cookie headers into key/value pairs for owner-session and room-creator checks.",
+      "tags": [
+        "server",
+        "api-handler",
+        "signaling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/cookies.ts:parseCookies",
+      "type": "function",
+      "name": "parseCookies",
+      "filePath": "server/cookies.ts",
+      "lineRange": [
+        1,
+        16
+      ],
+      "summary": "Parses cookies data into the internal format used by cookies.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:server/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "server/index.ts",
+      "summary": "Runs the custom HTTP server around Next.js, enforcing security headers, HTTPS redirects, owner authentication, rate limits, and room API endpoints.",
+      "tags": [
+        "server",
+        "api-handler",
+        "signaling"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:server/index.ts:consumeRateLimit",
+      "type": "function",
+      "name": "consumeRateLimit",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        69,
+        89
+      ],
+      "summary": "Implements consumeRateLimit behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:ownerSessionValue",
+      "type": "function",
+      "name": "ownerSessionValue",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        91,
+        100
+      ],
+      "summary": "Implements ownerSessionValue behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:constantTimeEqual",
+      "type": "function",
+      "name": "constantTimeEqual",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        102,
+        111
+      ],
+      "summary": "Implements constantTimeEqual behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:isOwnerRequest",
+      "type": "function",
+      "name": "isOwnerRequest",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        113,
+        124
+      ],
+      "summary": "Computes isOwnerRequest state used by index.ts without mutating broader application state.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:readJson",
+      "type": "function",
+      "name": "readJson",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        160,
+        172
+      ],
+      "summary": "Implements readJson behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:sendJson",
+      "type": "function",
+      "name": "sendJson",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        174,
+        185
+      ],
+      "summary": "Implements sendJson behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:handleOwnerApi",
+      "type": "function",
+      "name": "handleOwnerApi",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        197,
+        254
+      ],
+      "summary": "Implements handleOwnerApi behavior for index.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/index.ts:handleRoomApi",
+      "type": "function",
+      "name": "handleRoomApi",
+      "filePath": "server/index.ts",
+      "lineRange": [
+        256,
+        375
+      ],
+      "summary": "Handles room creation, lookup, join validation, room-code checks, and room-ended API routes.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:server/rooms.ts",
+      "type": "file",
+      "name": "rooms.ts",
+      "filePath": "server/rooms.ts",
+      "summary": "Maintains in-memory room, room-code, participant, creator-secret, and subtitle-service state while enforcing the hard two-person room limit.",
+      "tags": [
+        "server",
+        "api-handler",
+        "signaling"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:server/rooms.ts:creatorCookieName",
+      "type": "function",
+      "name": "creatorCookieName",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        35,
+        35
+      ],
+      "summary": "Implements creatorCookieName behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:generateUniqueRoomCode",
+      "type": "function",
+      "name": "generateUniqueRoomCode",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        45,
+        56
+      ],
+      "summary": "Implements generateUniqueRoomCode behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:createRoom",
+      "type": "function",
+      "name": "createRoom",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        68,
+        90
+      ],
+      "summary": "Implements createRoom behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:getRoom",
+      "type": "function",
+      "name": "getRoom",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        92,
+        95
+      ],
+      "summary": "Computes getRoom state used by rooms.ts without mutating broader application state.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:getRoomByCode",
+      "type": "function",
+      "name": "getRoomByCode",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        97,
+        107
+      ],
+      "summary": "Computes getRoomByCode state used by rooms.ts without mutating broader application state.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:roomExists",
+      "type": "function",
+      "name": "roomExists",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        109,
+        111
+      ],
+      "summary": "Implements roomExists behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:isCreatorSecret",
+      "type": "function",
+      "name": "isCreatorSecret",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        113,
+        116
+      ],
+      "summary": "Computes isCreatorSecret state used by rooms.ts without mutating broader application state.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:joinRoom",
+      "type": "function",
+      "name": "joinRoom",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        139,
+        225
+      ],
+      "summary": "Validates a participant join request, enforces room language and two-person limits, records participant state, and returns join outcomes.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:server/rooms.ts:startSubtitleService",
+      "type": "function",
+      "name": "startSubtitleService",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        227,
+        237
+      ],
+      "summary": "Implements startSubtitleService behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:stopSubtitleService",
+      "type": "function",
+      "name": "stopSubtitleService",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        239,
+        249
+      ],
+      "summary": "Implements stopSubtitleService behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:leaveRoom",
+      "type": "function",
+      "name": "leaveRoom",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        251,
+        266
+      ],
+      "summary": "Implements leaveRoom behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:updateParticipantLanguage",
+      "type": "function",
+      "name": "updateParticipantLanguage",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        268,
+        283
+      ],
+      "summary": "Implements updateParticipantLanguage behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/rooms.ts:findParticipantBySocket",
+      "type": "function",
+      "name": "findParticipantBySocket",
+      "filePath": "server/rooms.ts",
+      "lineRange": [
+        285,
+        295
+      ],
+      "summary": "Implements findParticipantBySocket behavior for rooms.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:server/signaling.ts",
+      "type": "file",
+      "name": "signaling.ts",
+      "filePath": "server/signaling.ts",
+      "summary": "Attaches Socket.IO signaling handlers for room join/leave, WebRTC offers and ICE, microphone audio transcription, translation, subtitles, and room status broadcasts.",
+      "tags": [
+        "server",
+        "api-handler",
+        "signaling"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:server/signaling.ts:consumeRateLimit",
+      "type": "function",
+      "name": "consumeRateLimit",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        51,
+        66
+      ],
+      "summary": "Implements consumeRateLimit behavior for signaling.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/signaling.ts:emitRoomStatus",
+      "type": "function",
+      "name": "emitRoomStatus",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        76,
+        85
+      ],
+      "summary": "Emits Socket.IO room or participant events used to keep both call peers synchronized.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/signaling.ts:emitToOtherParticipant",
+      "type": "function",
+      "name": "emitToOtherParticipant",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        87,
+        104
+      ],
+      "summary": "Emits Socket.IO room or participant events used to keep both call peers synchronized.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/signaling.ts:captionTextForLanguage",
+      "type": "function",
+      "name": "captionTextForLanguage",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        114,
+        132
+      ],
+      "summary": "Implements captionTextForLanguage behavior for signaling.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/signaling.ts:buildCaption",
+      "type": "function",
+      "name": "buildCaption",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        134,
+        161
+      ],
+      "summary": "Implements buildCaption behavior for signaling.ts.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:server/signaling.ts:createSignalingServer",
+      "type": "function",
+      "name": "createSignalingServer",
+      "filePath": "server/signaling.ts",
+      "lineRange": [
+        163,
+        415
+      ],
+      "summary": "Registers Socket.IO handlers for room lifecycle, WebRTC signaling, audio chunk processing, subtitle fan-out, and disconnect cleanup.",
+      "tags": [
+        "server",
+        "event-handler",
+        "room-state"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:TODO.md",
+      "type": "document",
+      "name": "TODO.md",
+      "filePath": "TODO.md",
+      "summary": "Tracks the remaining manual validation task for testing the full TURN and Cloudflare flow with two real browsers.",
+      "tags": [
+        "documentation",
+        "project-guidance",
+        "constraints"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "tsconfig.json",
+      "summary": "Configures TypeScript compiler behavior, Next.js plugin support, strict checking, JSX handling, and the @/* path alias.",
+      "tags": [
+        "configuration",
+        "build-system",
+        "runtime-settings"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:app/layout.tsx",
+      "target": "file:app/globals.css",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/layout.tsx",
+      "target": "function:app/layout.tsx:RootLayout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:app/layout.tsx",
+      "target": "function:app/layout.tsx:RootLayout",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "file:components/LanguageGate.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "file:components/UsernameGate.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "file:lib/roomCode.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "function:app/page.tsx:HomePage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:app/page.tsx",
+      "target": "function:app/page.tsx:HomePage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/robots.ts",
+      "target": "function:app/robots.ts:robots",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:app/robots.ts",
+      "target": "function:app/robots.ts:robots",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:app/room/[roomId]/page.tsx",
+      "target": "file:components/CallRoom.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:app/room/[roomId]/page.tsx",
+      "target": "function:app/room/[roomId]/page.tsx:RoomPage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:app/room/[roomId]/page.tsx",
+      "target": "function:app/room/[roomId]/page.tsx:RoomPage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:components/LanguageGate.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:components/SubtitlesPanel.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:components/UsernameGate.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:components/VideoGrid.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/audioCapture.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/audioEnhancement.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/roomCode.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/socket.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "file:lib/webrtc.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:stopSpeakingMonitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:startSpeakingMonitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:getSessionParticipantId",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:errorForJoinReason",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:appendCaptionLog",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:CallRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/CallRoom.tsx",
+      "target": "function:components/CallRoom.tsx:CallRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:components/LanguageGate.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/LanguageGate.tsx",
+      "target": "function:components/LanguageGate.tsx:LanguageGate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/LanguageGate.tsx",
+      "target": "function:components/LanguageGate.tsx:LanguageGate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:components/SubtitlesPanel.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/SubtitlesPanel.tsx",
+      "target": "function:components/SubtitlesPanel.tsx:SubtitlesPanel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/SubtitlesPanel.tsx",
+      "target": "function:components/SubtitlesPanel.tsx:SubtitlesPanel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:components/UsernameGate.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/UsernameGate.tsx",
+      "target": "function:components/UsernameGate.tsx:UsernameGate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/UsernameGate.tsx",
+      "target": "function:components/UsernameGate.tsx:UsernameGate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:components/VideoGrid.tsx",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:components/VideoGrid.tsx",
+      "target": "function:components/VideoGrid.tsx:VideoGrid",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:components/VideoGrid.tsx",
+      "target": "function:components/VideoGrid.tsx:VideoGrid",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:floatTo16BitPcm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:downsample",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:calculateRms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:mergePcm",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:encodeWav",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:createAudioCapture",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioCapture.ts",
+      "target": "function:lib/audioCapture.ts:createAudioCapture",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/audioEnhancement.ts",
+      "target": "function:lib/audioEnhancement.ts:calculateRms",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioEnhancement.ts",
+      "target": "function:lib/audioEnhancement.ts:createSoftNoiseGate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioEnhancement.ts",
+      "target": "function:lib/audioEnhancement.ts:createFallback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioEnhancement.ts",
+      "target": "function:lib/audioEnhancement.ts:createEnhancedMicrophoneStream",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/audioEnhancement.ts",
+      "target": "function:lib/audioEnhancement.ts:createEnhancedMicrophoneStream",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:languageLabel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:languageLabel",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:isSupportedLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:isSupportedLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:oppositeLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:oppositeLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:getSavedLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:getSavedLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:saveLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:saveLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:clearSavedLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:clearSavedLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:normalizeDisplayName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:normalizeDisplayName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:getSavedDisplayName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:getSavedDisplayName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:saveDisplayName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:saveDisplayName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:clearSavedDisplayName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:clearSavedDisplayName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:t",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/i18n.ts",
+      "target": "function:lib/i18n.ts:t",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:roomCodeStorageKey",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:roomCodeStorageKey",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:saveRoomCodeForRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:saveRoomCodeForRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:getSavedRoomCodeForRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/roomCode.ts",
+      "target": "function:lib/roomCode.ts:getSavedRoomCodeForRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/socket.ts",
+      "target": "function:lib/socket.ts:getSocket",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/socket.ts",
+      "target": "function:lib/socket.ts:getSocket",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:getOpenAIClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:isTranscriptionConfigured",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:isTranscriptionConfigured",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:transcriptionPrompt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:transcribeWithPrompt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:transcribeSpeech",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/transcription.ts",
+      "target": "function:lib/transcription.ts:transcribeSpeech",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/translation.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:lib/translation.ts",
+      "target": "function:lib/translation.ts:getOpenAIClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/translation.ts",
+      "target": "function:lib/translation.ts:translateText",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/translation.ts",
+      "target": "function:lib/translation.ts:translateText",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:parseIceServers",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:createPeerConnection",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:createPeerConnection",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:addStreamTracks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:addStreamTracks",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:closePeerConnection",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:lib/webrtc.ts",
+      "target": "function:lib/webrtc.ts:closePeerConnection",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:server/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:lib/webrtc.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:lib/transcription.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:lib/translation.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:run.sh",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:AGENTS.md",
+      "target": "file:components/CallRoom.tsx",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:AGENTS.md",
+      "target": "file:server/rooms.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:AGENTS.md",
+      "target": "file:run.sh",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "service:docker-compose.turn.yml",
+      "target": "file:run.sh",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "service:docker-compose.turn.yml",
+      "target": "file:lib/webrtc.ts",
+      "type": "serves",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:eslint.config.mjs",
+      "target": "config:package.json",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:next.config.ts",
+      "target": "file:app/layout.tsx",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:next.config.ts",
+      "target": "file:server/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:server/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:app/page.tsx",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:components/CallRoom.tsx",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:cleanup",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:stop_port_processes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:env_file_value",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:write_oci_config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:oci_instance_public_ip",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:wait_for_oci_instance",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:wait_for_ssh",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:configure_oci_turn",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:run.sh",
+      "target": "function:run.sh:configure_turn",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:parseEnvFile",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:cloudflare",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:ensureTunnel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:configureTunnel",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:replaceDnsRecord",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:setup",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:scripts/cloudflare-tunnel.mjs",
+      "target": "function:scripts/cloudflare-tunnel.mjs:run",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/cookies.ts",
+      "target": "function:server/cookies.ts:parseCookies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/cookies.ts",
+      "target": "function:server/cookies.ts:parseCookies",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "file:server/cookies.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "file:server/signaling.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "file:server/rooms.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:consumeRateLimit",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:ownerSessionValue",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:constantTimeEqual",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:isOwnerRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:readJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:sendJson",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:handleOwnerApi",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/index.ts",
+      "target": "function:server/index.ts:handleRoomApi",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:creatorCookieName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:creatorCookieName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:generateUniqueRoomCode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:createRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:createRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:getRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:getRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:getRoomByCode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:getRoomByCode",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:roomExists",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:roomExists",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:isCreatorSecret",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:isCreatorSecret",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:joinRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:joinRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:startSubtitleService",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:startSubtitleService",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:stopSubtitleService",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:stopSubtitleService",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:leaveRoom",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:leaveRoom",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:updateParticipantLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:updateParticipantLanguage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:findParticipantBySocket",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/rooms.ts",
+      "target": "function:server/rooms.ts:findParticipantBySocket",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "file:lib/i18n.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "file:lib/transcription.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "file:lib/translation.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "file:server/cookies.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "file:server/rooms.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:consumeRateLimit",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:emitRoomStatus",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:emitToOtherParticipant",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:captionTextForLanguage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:buildCaption",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:createSignalingServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:server/signaling.ts",
+      "target": "function:server/signaling.ts:createSignalingServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:postcss.config.mjs",
+      "target": "file:app/globals.css",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:app/page.tsx",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:components/CallRoom.tsx",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:server/index.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:server/rooms.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:server/signaling.ts",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:run.sh",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "service:docker-compose.turn.yml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:run.sh",
+      "target": "file:server/index.ts",
+      "type": "deploys",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:run.sh",
+      "target": "file:scripts/cloudflare-tunnel.mjs",
+      "type": "triggers",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:run.sh",
+      "target": "service:docker-compose.turn.yml",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:TODO.md",
+      "target": "file:run.sh",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:tsconfig.json",
+      "target": "file:app/page.tsx",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:tsconfig.json",
+      "target": "file:server/index.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:tsconfig.json",
+      "target": "file:components/CallRoom.tsx",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:tsconfig.json",
+      "target": "file:next-env.d.ts",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:documentation-and-product-constraints",
+      "name": "Documentation and Product Constraints",
+      "description": "Project README, task list, and agent guidance that define Sakura Call as a private two-person audio-only communication tool.",
+      "nodeIds": [
+        "document:README.md",
+        "document:AGENTS.md",
+        "document:TODO.md"
+      ]
+    },
+    {
+      "id": "layer:nextjs-routes-and-styling",
+      "name": "Next.js Routes and Styling",
+      "description": "App Router pages, root layout, crawler policy, global styles, and generated Next.js type declarations that shape the browser entry surface.",
+      "nodeIds": [
+        "file:app/layout.tsx",
+        "file:app/page.tsx",
+        "file:app/robots.ts",
+        "file:app/room/[roomId]/page.tsx",
+        "file:app/globals.css",
+        "file:next-env.d.ts"
+      ]
+    },
+    {
+      "id": "layer:call-experience-components",
+      "name": "Call Experience Components",
+      "description": "Client React components for language selection, display-name capture, in-room WebRTC controls, participant panels, and subtitle display.",
+      "nodeIds": [
+        "file:components/CallRoom.tsx",
+        "file:components/LanguageGate.tsx",
+        "file:components/SubtitlesPanel.tsx",
+        "file:components/UsernameGate.tsx",
+        "file:components/VideoGrid.tsx"
+      ]
+    },
+    {
+      "id": "layer:browser-media-and-shared-utilities",
+      "name": "Browser Media and Shared Utilities",
+      "description": "Shared browser/client utilities for audio segmentation, microphone enhancement, WebRTC setup, Socket.IO client creation, room-code persistence, and bilingual copy.",
+      "nodeIds": [
+        "file:lib/audioCapture.ts",
+        "file:lib/audioEnhancement.ts",
+        "file:lib/i18n.ts",
+        "file:lib/roomCode.ts",
+        "file:lib/socket.ts",
+        "file:lib/webrtc.ts"
+      ]
+    },
+    {
+      "id": "layer:server-room-and-translation-runtime",
+      "name": "Server Room and Translation Runtime",
+      "description": "Custom Node server, cookie parsing, in-memory room state, Socket.IO signaling, transcription, and translation services that power the live call.",
+      "nodeIds": [
+        "file:server/index.ts",
+        "file:server/cookies.ts",
+        "file:server/rooms.ts",
+        "file:server/signaling.ts",
+        "file:lib/transcription.ts",
+        "file:lib/translation.ts"
+      ]
+    },
+    {
+      "id": "layer:on-demand-networking-and-operations",
+      "name": "On-Demand Networking and Operations",
+      "description": "Runtime scripts and TURN/Cloudflare infrastructure that start the app for a call, expose HTTP through Cloudflare Tunnel, and provide direct TURN relay fallback.",
+      "nodeIds": [
+        "file:run.sh",
+        "file:scripts/cloudflare-tunnel.mjs",
+        "service:docker-compose.turn.yml",
+        "config:.env.example"
+      ]
+    },
+    {
+      "id": "layer:tooling-and-build-configuration",
+      "name": "Tooling and Build Configuration",
+      "description": "Package, TypeScript, Next.js, ESLint, and PostCSS configuration for development, linting, compilation, and styling.",
+      "nodeIds": [
+        "config:package.json",
+        "config:tsconfig.json",
+        "file:next.config.ts",
+        "file:eslint.config.mjs",
+        "file:postcss.config.mjs"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Project Overview",
+      "description": "Start with the README and constraints to understand the private two-person audio translation workflow and the on-demand operating model.",
+      "nodeIds": [
+        "document:README.md",
+        "document:AGENTS.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "Join and Host Flow",
+      "description": "Read the Next.js entry route to see how language, display name, owner unlock, room creation, and four-digit room-code joining are coordinated.",
+      "nodeIds": [
+        "file:app/page.tsx",
+        "file:components/LanguageGate.tsx",
+        "file:components/UsernameGate.tsx",
+        "file:lib/roomCode.ts"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "In-Room Call Experience",
+      "description": "Follow the main call component and supporting panels to understand microphone permission, WebRTC audio, participant status, and translated subtitle display.",
+      "nodeIds": [
+        "file:components/CallRoom.tsx",
+        "file:components/SubtitlesPanel.tsx",
+        "file:components/VideoGrid.tsx"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "Audio Capture and WebRTC Helpers",
+      "description": "Inspect the browser-side media helpers that enhance microphone input, segment speech into WAV chunks, and configure STUN/TURN peer connections.",
+      "nodeIds": [
+        "file:lib/audioCapture.ts",
+        "file:lib/audioEnhancement.ts",
+        "file:lib/webrtc.ts",
+        "file:lib/socket.ts"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "Server APIs and Room State",
+      "description": "Move to the custom server and room store to see owner authentication, rate limiting, room-code lookup, creator secrets, and the hard two-person room limit.",
+      "nodeIds": [
+        "file:server/index.ts",
+        "file:server/rooms.ts",
+        "file:server/cookies.ts"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "Signaling, Transcription, and Translation",
+      "description": "Trace the Socket.IO signaling layer and OpenAI wrappers that turn incoming audio chunks into translated captions for the other participant.",
+      "nodeIds": [
+        "file:server/signaling.ts",
+        "file:lib/transcription.ts",
+        "file:lib/translation.ts",
+        "file:lib/i18n.ts"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "On-Demand Public Runtime",
+      "description": "Finish with the run scripts and infrastructure settings that start TURN, build the app with current relay configuration, expose HTTP through Cloudflare Tunnel, and clean up on exit.",
+      "nodeIds": [
+        "file:run.sh",
+        "file:scripts/cloudflare-tunnel.mjs",
+        "service:docker-compose.turn.yml",
+        "config:.env.example"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "Build and Tooling",
+      "description": "Review package scripts and compiler/lint styling configuration to understand how the project is developed and verified.",
+      "nodeIds": [
+        "config:package.json",
+        "config:tsconfig.json",
+        "file:next.config.ts",
+        "file:eslint.config.mjs",
+        "file:postcss.config.mjs"
+      ]
+    }
+  ]
+}

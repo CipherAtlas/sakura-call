@@ -5,6 +5,7 @@ import nextEnv from "@next/env";
 import next from "next";
 import { isSupportedLanguage } from "../lib/i18n";
 import { parseCookies } from "./cookies";
+import { enforceMutationOrigin } from "./origin";
 import { createSignalingServer } from "./signaling";
 import {
   createRoom,
@@ -14,6 +15,13 @@ import {
   isCreatorSecret,
   roomExists
 } from "./rooms";
+import {
+  getActiveTurnIceServer,
+  getTurnStatus,
+  startTurnRelay,
+  stopTurnRelay,
+  stopTurnRelayOnExit
+} from "./turn";
 
 const { loadEnvConfig } = nextEnv;
 
@@ -32,6 +40,7 @@ const ownerAccessToken =
 const ownerSessionSecret =
   process.env.ROOM_OWNER_SESSION_SECRET || ownerAccessToken;
 const ownerSessionMaxAge = 60 * 60 * 24 * 14;
+const defaultStunUrls = ["stun:stun.l.google.com:19302"];
 
 type RateLimitState = {
   count: number;
@@ -194,6 +203,36 @@ function shouldUseSecureCookie(request: IncomingMessage) {
   return process.env.NODE_ENV === "production" && !isLocalHost(host);
 }
 
+function parseUrlList(value: string | undefined) {
+  return value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function configuredIceServers() {
+  const stunUrls = parseUrlList(process.env.NEXT_PUBLIC_STUN_URLS);
+  const turnUrls = parseUrlList(process.env.NEXT_PUBLIC_TURN_URLS);
+  const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME;
+  const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+  const iceServers: RTCIceServer[] = [
+    { urls: stunUrls && stunUrls.length > 0 ? stunUrls : defaultStunUrls }
+  ];
+  const activeTurnIceServer = getActiveTurnIceServer();
+
+  if (activeTurnIceServer) {
+    iceServers.push(activeTurnIceServer);
+  } else if (turnUrls && turnUrls.length > 0 && turnUsername && turnCredential) {
+    iceServers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnCredential
+    });
+  }
+
+  return iceServers;
+}
+
 async function handleOwnerApi(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
 
@@ -247,6 +286,55 @@ async function handleOwnerApi(request: IncomingMessage, response: ServerResponse
         "set-cookie": cookie
       }
     );
+    return true;
+  }
+
+  return false;
+}
+
+async function handleTurnApi(request: IncomingMessage, response: ServerResponse) {
+  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
+
+  if (request.method === "GET" && url.pathname === "/api/ice-servers") {
+    sendJson(response, 200, {
+      iceServers: configuredIceServers(),
+      iceTransportPolicy:
+        process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY === "relay"
+          ? "relay"
+          : "all"
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/turn/status") {
+    if (!isOwnerRequest(request)) {
+      sendJson(response, 403, { error: "owner-required" });
+      return true;
+    }
+
+    sendJson(response, 200, getTurnStatus());
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/turn/start") {
+    if (!isOwnerRequest(request)) {
+      sendJson(response, 403, { error: "owner-required" });
+      return true;
+    }
+
+    void startTurnRelay();
+    sendJson(response, 202, getTurnStatus());
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/turn/stop") {
+    if (!isOwnerRequest(request)) {
+      sendJson(response, 403, { error: "owner-required" });
+      return true;
+    }
+
+    void stopTurnRelay();
+    sendJson(response, 202, getTurnStatus());
     return true;
   }
 
@@ -385,7 +473,15 @@ const httpServer = createServer((request, response) => {
 
     applySecurityHeaders(request, response);
 
+    if (!enforceMutationOrigin(request, response)) {
+      return;
+    }
+
     if (await handleOwnerApi(request, response)) {
+      return;
+    }
+
+    if (await handleTurnApi(request, response)) {
       return;
     }
 
@@ -402,3 +498,11 @@ createSignalingServer(httpServer);
 httpServer.listen(port, () => {
   console.log(`Ready on http://${hostname}:${port}`);
 });
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void stopTurnRelayOnExit().finally(() => {
+      process.exit(0);
+    });
+  });
+}
