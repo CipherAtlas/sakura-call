@@ -10,6 +10,7 @@ Sakura Call is designed as a private, self-hosted, two-person, peer-to-peer-firs
 - Room state is in server memory and expires with the process or room cleanup. There is no account database, searchable room list, message database, or persistent call history.
 - Room creation requires the owner session. Guests join through the 4-digit room code flow.
 - The live captions feature is different from the WebRTC media path: local microphone chunks are sent to this server, then to the configured OpenAI API for transcription and translation. Caption text is then relayed to the other participant and previewed locally.
+- Each browser must acknowledge the captions privacy notice before that browser starts sending microphone chunks for captions. Remote audio is not transcribed from another participant's browser.
 
 ## What Is Good Today
 
@@ -19,6 +20,7 @@ Sakura Call is designed as a private, self-hosted, two-person, peer-to-peer-firs
 - Room codes are not placed in URLs or local storage.
 - Owner and room creator privileges use HTTP-only cookies.
 - The OpenAI API key stays server-side.
+- The meeting UI separates the media-encryption boundary from the optional captions/OpenAI processing boundary before captions are enabled.
 - The fallback TURN relay is intended to be started only when needed and stopped on exit.
 - The production dependency audit currently reports no vulnerabilities after updating the PostCSS dependency used by Next through npm overrides.
 
@@ -37,13 +39,12 @@ Sakura Call is designed as a private, self-hosted, two-person, peer-to-peer-firs
 ### P0: Must Stay True For Safe Private Use
 
 - Keep the deployment private and owner-operated. Do not add public room discovery, user accounts, queues, group calls, or long-lived service operation without a broader security review.
-- Keep captions opt-in. When captions are enabled, speech audio and transcript content leave the browser and are processed by the server and OpenAI.
+- Keep captions opt-in per browser. When captions are enabled, that browser's speech audio and transcript content leave the browser and are processed by the server and OpenAI.
 - Keep the TURN relay ephemeral and guarded. TURN should start only when needed, use non-default credentials, and stop when the call ends.
 - Keep `.env`, `.env.local`, OCI keys, Cloudflare tokens, OpenAI keys, TURN passwords, and SSH keys out of git.
 
 ### P1: Should Do Before Presenting As A Serious Developer Tool
 
-- Add a visible in-app captions privacy notice before starting the subtitle service.
 - Add a `Content-Security-Policy`, `frame-ancestors 'none'`, `X-Content-Type-Options`, `Referrer-Policy`, and a camera/microphone/screen-share `Permissions-Policy`.
 - Add focused tests for room join, invalid session token rejection, reconnect reclaim, two-person enforcement, origin rejection, and host-only subtitle/TURN controls.
 - Add structured server logs that avoid transcript, audio, room code, token, and TURN credential content.
@@ -61,4 +62,4 @@ Sakura Call is designed as a private, self-hosted, two-person, peer-to-peer-firs
 
 The accurate positioning is: self-hosted, ephemeral, two-person, peer-to-peer-first WebRTC calling with optional AI captions.
 
-Avoid claiming that the whole product is fully private or end-to-end encrypted in the same sense as a dedicated E2EE messenger. The WebRTC media path is encrypted and peer-to-peer first, but signaling, TURN metadata, room state, and AI captions each have their own privacy boundaries.
+Avoid claiming that the whole product is fully private or end-to-end encrypted in the same sense as a dedicated E2EE messenger. A precise claim is: audio, video, and screen sharing use encrypted WebRTC media transport between the two browsers, including when relayed through TURN; optional captions/translations are not end-to-end encrypted because local microphone segments are processed by this server and OpenAI.

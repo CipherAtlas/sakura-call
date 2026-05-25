@@ -255,9 +255,8 @@ configure_oci_turn() {
   turn_host="$(oci_instance_public_ip "$instance_id")"
   wait_for_ssh "$ssh_user" "$ssh_key" "$turn_host"
 
-  turn_username="${TURN_USERNAME:-${NEXT_PUBLIC_TURN_USERNAME:-$(env_file_value NEXT_PUBLIC_TURN_USERNAME)}}"
-  turn_password="${TURN_PASSWORD:-${NEXT_PUBLIC_TURN_CREDENTIAL:-}}"
-  turn_password="${turn_password:-$(env_file_value NEXT_PUBLIC_TURN_CREDENTIAL)}"
+  turn_username="${TURN_USERNAME:-$(env_file_value TURN_USERNAME)}"
+  turn_password="${TURN_PASSWORD:-$(env_file_value TURN_PASSWORD)}"
   turn_username="${turn_username:-sakura}"
 
   if [[ -z "$turn_password" || "$turn_password" == "change-me" ]]; then
@@ -273,9 +272,9 @@ configure_oci_turn() {
     "$ssh_user@$turn_host" \
     "sudo env TURN_USERNAME='$turn_username' TURN_PASSWORD='$turn_password' /opt/sakura-turn/start-turn.sh '$turn_host'" >/dev/null
 
-  export NEXT_PUBLIC_TURN_USERNAME="$turn_username"
-  export NEXT_PUBLIC_TURN_CREDENTIAL="$turn_password"
-  export NEXT_PUBLIC_TURN_URLS="turn:$turn_host:3478?transport=udp,turn:$turn_host:3478?transport=tcp"
+  export TURN_USERNAME="$turn_username"
+  export TURN_PASSWORD="$turn_password"
+  export TURN_URLS="turn:$turn_host:3478?transport=udp,turn:$turn_host:3478?transport=tcp"
   export NEXT_PUBLIC_ICE_TRANSPORT_POLICY="${NEXT_PUBLIC_ICE_TRANSPORT_POLICY:-all}"
 }
 
@@ -309,9 +308,8 @@ configure_turn() {
   local turn_username
   local turn_password
 
-  turn_username="${TURN_USERNAME:-${NEXT_PUBLIC_TURN_USERNAME:-$(env_file_value NEXT_PUBLIC_TURN_USERNAME)}}"
-  turn_password="${TURN_PASSWORD:-${NEXT_PUBLIC_TURN_CREDENTIAL:-}}"
-  turn_password="${turn_password:-$(env_file_value NEXT_PUBLIC_TURN_CREDENTIAL)}"
+  turn_username="${TURN_USERNAME:-$(env_file_value TURN_USERNAME)}"
+  turn_password="${TURN_PASSWORD:-$(env_file_value TURN_PASSWORD)}"
   turn_username="${turn_username:-sakura}"
 
   if [[ -z "$turn_password" || "$turn_password" == "change-me" ]]; then
@@ -332,9 +330,7 @@ configure_turn() {
   export TURN_USERNAME="$turn_username"
   export TURN_PASSWORD="$turn_password"
   export TURN_EXTERNAL_IP="${TURN_EXTERNAL_IP:-$turn_host}"
-  export NEXT_PUBLIC_TURN_USERNAME="$turn_username"
-  export NEXT_PUBLIC_TURN_CREDENTIAL="$turn_password"
-  export NEXT_PUBLIC_TURN_URLS="turn:$turn_host:3478?transport=udp,turn:$turn_host:3478?transport=tcp"
+  export TURN_URLS="turn:$turn_host:3478?transport=udp,turn:$turn_host:3478?transport=tcp"
   export NEXT_PUBLIC_ICE_TRANSPORT_POLICY="${NEXT_PUBLIC_ICE_TRANSPORT_POLICY:-all}"
 
   echo "Starting fallback TURN server for this run..."
@@ -369,11 +365,10 @@ for port in "${PORTS_TO_CLEAR[@]}"; do
   stop_port_processes "$port"
 done
 
-configure_turn
-
-if [[ "$TURN_ENABLED" == "0" ]]; then
-  echo "TURN relay startup is deferred. Use the host relay button if fallback is needed."
+if [[ "$TURN_ENABLED" != "0" ]]; then
+  echo "TURN_ENABLED is ignored; TURN relay startup is on-demand only."
 fi
+echo "TURN relay startup is deferred. Use the host relay button if fallback is needed."
 
 echo "Building production app..."
 npm run build

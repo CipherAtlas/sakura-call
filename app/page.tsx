@@ -5,6 +5,7 @@ import {
   Flower2,
   KeyRound,
   Leaf,
+  LogOut,
   Settings,
   Sparkles,
   TowerControl,
@@ -95,6 +96,7 @@ export default function HomePage() {
   const [ownerAccessConfigured, setOwnerAccessConfigured] = useState(false);
   const [ownerToken, setOwnerToken] = useState("");
   const [isOwnerSigningIn, setIsOwnerSigningIn] = useState(false);
+  const [isOwnerSigningOut, setIsOwnerSigningOut] = useState(false);
   const [ownerMessage, setOwnerMessage] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [showSettings, setShowSettings] = useState(false);
@@ -338,12 +340,42 @@ export default function HomePage() {
       setIsOwner(true);
       setOwnerAccessConfigured(true);
       setOwnerToken("");
-      setOwnerMessage(t(language, "hostModeEnabled"));
+      setOwnerMessage("");
       setHomeMode("choose");
     } catch {
       setOwnerMessage(t(language, "hostAccessDenied"));
     } finally {
       setIsOwnerSigningIn(false);
+    }
+  }
+
+  async function handleDisableHostMode() {
+    if (!language) {
+      return;
+    }
+
+    setIsOwnerSigningOut(true);
+    setOwnerMessage("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/owner/session", {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        setOwnerMessage(t(language, "hostAccessDenied"));
+        return;
+      }
+
+      setIsOwner(false);
+      setOwnerToken("");
+      setHomeMode("join");
+      setOwnerMessage(t(language, "hostModeDisabled"));
+    } catch {
+      setOwnerMessage(t(language, "hostAccessDenied"));
+    } finally {
+      setIsOwnerSigningOut(false);
     }
   }
 
@@ -444,6 +476,13 @@ export default function HomePage() {
     0,
     Math.min(100, turnStatus?.progress ?? 0)
   );
+  const createRoomLabel =
+    language === "en" ? "Create room" : t(language, "createRoom");
+  const joinRoomLabel = language === "en" ? "Join room" : t(language, "joinRoom");
+  const homeFootnote =
+    language === "en"
+      ? "Two people only. English and Japanese."
+      : t(language, "homeFootnote");
   const turnRelayPanel = isOwner ? (
     <section className="settings-modal-section turn-relay-panel">
       <div className="flex items-start gap-3">
@@ -513,114 +552,134 @@ export default function HomePage() {
   ) : null;
 
   return (
-    <main className="garden-scene safe-bottom min-h-dvh px-5 py-6">
-      <section className="mx-auto flex min-h-[calc(100dvh-3rem)] w-full max-w-md flex-col justify-center">
-        <div className="garden-panel p-4 sm:p-5">
-          <header className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="garden-kicker flex items-center gap-2">
-                <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
+    <main className="sakura-home garden-scene safe-bottom min-h-dvh px-5 py-6">
+      <section className="sakura-home-stage mx-auto flex min-h-[calc(100dvh-3rem)] w-full items-center justify-center">
+        <div className="sakura-shell">
+          <div className="sakura-copy">
+            <header className="sakura-header">
+              <p className="sakura-brand">
+                <Flower2 className="h-6 w-6" aria-hidden="true" />
                 {t(language, "appName")}
               </p>
-              <h1 className="garden-title mt-3 text-3xl sm:text-4xl">
+              <div className="sakura-actions">
+                <button
+                  type="button"
+                  aria-label={t(language, "back")}
+                  onClick={
+                    isOwner && effectiveHomeMode === "join"
+                      ? handleBackToChoices
+                      : handleBackToUsername
+                  }
+                  className="garden-icon-button sakura-icon-button"
+                >
+                  <ArrowLeft className="h-6 w-6" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={t(language, "settings")}
+                  onClick={() => setShowSettings(true)}
+                  className="garden-icon-button sakura-icon-button"
+                >
+                  <Settings className="h-6 w-6" aria-hidden="true" />
+                </button>
+              </div>
+            </header>
+
+            <div className="sakura-body">
+              <h1 className="garden-title sakura-title">
                 {effectiveHomeMode === "join"
                   ? t(language, "joinWithCode")
                   : t(language, "homeTitle")}
               </h1>
-              <p className="garden-muted mt-2 max-w-sm text-sm font-bold leading-snug">
+              <p className="garden-muted sakura-subtitle">
                 {effectiveHomeMode === "join"
                   ? t(language, "codeHelpGuest")
-                  : t(language, "homeFootnote")}
+                  : homeFootnote}
               </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                aria-label={t(language, "back")}
-                onClick={
-                  isOwner && effectiveHomeMode === "join"
-                    ? handleBackToChoices
-                    : handleBackToUsername
-                }
-                className="garden-icon-button grid h-11 w-11 place-items-center rounded-full"
-              >
-                <ArrowLeft className="h-5 w-5" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                aria-label={t(language, "settings")}
-                onClick={() => setShowSettings(true)}
-                className="garden-icon-button grid h-11 w-11 place-items-center rounded-full"
-              >
-                <Settings className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </div>
-          </header>
 
-          {effectiveHomeMode === "choose" ? (
-            <div className="mt-5 grid gap-3">
-              <button
-                type="button"
-                onClick={handleCreateRoom}
-                disabled={isCreating}
-                className="garden-button garden-button-primary h-16 w-full gap-3 px-5 text-xl"
-              >
-                <Sparkles className="h-5 w-5" aria-hidden="true" />
-                {isCreating ? t(language, "creatingRoom") : t(language, "createRoom")}
-              </button>
+              {effectiveHomeMode === "choose" ? (
+                <div className="sakura-control-stack">
+                  <button
+                    type="button"
+                    onClick={handleCreateRoom}
+                    disabled={isCreating}
+                    className="garden-button garden-button-primary sakura-primary-button"
+                  >
+                    <Sparkles className="h-6 w-6" aria-hidden="true" />
+                    {isCreating
+                      ? t(language, "creatingRoom")
+                      : createRoomLabel}
+                  </button>
 
-              <button
-                type="button"
-                onClick={handleShowJoinRoom}
-                disabled={isCreating}
-                className="garden-button garden-button-quiet h-16 w-full gap-3 px-5 text-xl"
-              >
-                <Leaf className="h-5 w-5" aria-hidden="true" />
-                {t(language, "joinRoom")}
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleShowJoinRoom}
+                    disabled={isCreating}
+                    className="garden-button garden-button-quiet sakura-secondary-button"
+                  >
+                    <Leaf className="h-6 w-6" aria-hidden="true" />
+                    {joinRoomLabel}
+                  </button>
+                </div>
+              ) : (
+                <div className="sakura-control-stack">
+                  <label className="sakura-code-label" htmlFor="room-code">
+                    <Leaf className="h-5 w-5" aria-hidden="true" />
+                    {t(language, "enterRoomCode")}
+                  </label>
+                  <input
+                    id="room-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]*"
+                    maxLength={4}
+                    value={roomCode}
+                    onChange={(event) =>
+                      setRoomCode(
+                        event.target.value.replace(/\D/g, "").slice(0, 4)
+                      )
+                    }
+                    placeholder={t(language, "roomCodePlaceholder")}
+                    className="garden-input garden-code sakura-code-input"
+                  />
+                  <button
+                    type="button"
+                    disabled={!/^\d{4}$/.test(roomCode) || isJoining}
+                    onClick={handleJoinRoom}
+                    className="garden-button garden-button-primary sakura-primary-button"
+                  >
+                    {isJoining ? t(language, "joiningRoom") : joinRoomLabel}
+                  </button>
+                </div>
+              )}
+
+              {error ? (
+                <p className="garden-alert-error sakura-error">{error}</p>
+              ) : null}
             </div>
-          ) : (
-            <div className="mt-5">
-              <label
-                className="garden-text-muted flex items-center gap-2 text-sm font-black"
-                htmlFor="room-code"
-              >
-                <Leaf className="garden-icon-lilac h-4 w-4" aria-hidden="true" />
-                {t(language, "enterRoomCode")}
-              </label>
-              <input
-                id="room-code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]*"
-                maxLength={4}
-                value={roomCode}
-                onChange={(event) =>
-                  setRoomCode(event.target.value.replace(/\D/g, "").slice(0, 4))
-                }
-                placeholder={t(language, "roomCodePlaceholder")}
-                className="garden-input garden-code mt-3 h-16 w-full px-4 text-center text-3xl font-black tracking-[0.18em]"
-              />
-              <button
-                type="button"
-                disabled={!/^\d{4}$/.test(roomCode) || isJoining}
-                onClick={handleJoinRoom}
-                className="garden-button garden-button-secondary mt-3 h-14 w-full px-5 text-lg"
-              >
-                {isJoining ? t(language, "joiningRoom") : t(language, "joinRoom")}
-              </button>
-            </div>
-          )}
 
-          {error ? (
-            <p className="garden-alert-error mt-4 rounded-lg px-4 py-3 text-sm font-black">
-              {error}
-            </p>
-          ) : null}
+            <footer className="sakura-footer">
+              <span />
+              <Flower2 className="h-5 w-5" aria-hidden="true" />
+              <span />
+              <p>
+                {displayName} / {languageLabel(language)}
+              </p>
+            </footer>
+          </div>
 
-          <p className="garden-muted mt-5 border-t border-pink-200/60 pt-4 text-center text-sm font-black">
-            {displayName} / {languageLabel(language)}
-          </p>
+          <div className="sakura-visual" aria-hidden="true">
+            <span className="sakura-branch" />
+            <span className="sakura-bloom sakura-bloom-one" />
+            <span className="sakura-bloom sakura-bloom-two" />
+            <span className="sakura-bloom sakura-bloom-three" />
+            <span className="sakura-petal sakura-petal-one" />
+            <span className="sakura-petal sakura-petal-two" />
+            <span className="sakura-petal sakura-petal-three" />
+            <span className="sakura-petal sakura-petal-four" />
+            <span className="sakura-leaf sakura-leaf-one" />
+            <span className="sakura-leaf sakura-leaf-two" />
+          </div>
         </div>
       </section>
 
@@ -689,9 +748,22 @@ export default function HomePage() {
                   {t(language, "hostAccess")}
                 </p>
                 {isOwner ? (
-                  <p className="garden-muted mt-2 text-sm font-black">
-                    {t(language, "hostModeEnabled")}
-                  </p>
+                  <div className="mt-3 grid gap-3">
+                    <p className="garden-muted text-sm font-black">
+                      {t(language, "hostModeEnabled")}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleDisableHostMode()}
+                      disabled={isOwnerSigningOut}
+                      className="garden-button garden-button-quiet h-12 gap-2 px-4 text-base"
+                    >
+                      <LogOut className="h-5 w-5" aria-hidden="true" />
+                      {isOwnerSigningOut
+                        ? t(language, "disablingHostMode")
+                        : t(language, "disableHostMode")}
+                    </button>
+                  </div>
                 ) : ownerAccessConfigured ? (
                   <form className="mt-3 grid gap-3" onSubmit={handleUnlockHostMode}>
                     <input

@@ -13,10 +13,16 @@ The app is built for quick testing with another person over HTTPS using Cloudfla
 - Blocks a third participant from joining.
 - Runs peer-to-peer WebRTC audio, video, and screen sharing between the two browsers.
 - Uses Socket.IO for room state, signaling, reconnects, and subtitle events.
-- Captures the local microphone stream, segments speech in the browser, sends short WAV chunks to the server, transcribes them, translates them, and sends translated subtitles to the other participant.
+- Captures the local microphone stream only after that browser accepts the captions privacy notice, segments speech in the browser, sends short WAV chunks to the server, transcribes them, translates them, and sends translated subtitles to the other participant.
 - Shows the speaker a local preview of what the other participant receives.
 - Keeps the live conversation/captions area visible during audio, video, and screen-sharing modes.
 - Keeps the OpenAI API key server-side only.
+
+## Privacy Boundary
+
+Audio, video, and screen sharing use encrypted WebRTC media transport between the two browsers. TURN fallback relays encrypted WebRTC packets, but can still see connection metadata such as IPs, timing, and traffic volume.
+
+Live captions/translations are optional and outside that media-encryption boundary. When captions are enabled, the browser sends short local microphone segments to this app server and OpenAI for transcription and translation. Remote audio is not transcribed from another participant's browser.
 
 ## Tech Stack
 
@@ -79,9 +85,6 @@ Fill in at least:
 OPENAI_API_KEY=sk-...
 TRANSLATION_MODEL=gpt-4o-mini
 NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
-NEXT_PUBLIC_TURN_URLS=turn:localhost:3478?transport=udp,turn:localhost:3478?transport=tcp
-NEXT_PUBLIC_TURN_USERNAME=sakura
-NEXT_PUBLIC_TURN_CREDENTIAL=
 ROOM_OWNER_TOKEN=choose-a-private-host-passcode
 ROOM_OWNER_SESSION_SECRET=choose-a-long-random-cookie-secret
 ```
@@ -106,12 +109,11 @@ Localhost works for browser microphone testing. iPhone Safari and remote devices
 OPENAI_API_KEY=
 TRANSLATION_MODEL=gpt-4o-mini
 NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
-NEXT_PUBLIC_TURN_URLS=
-NEXT_PUBLIC_TURN_USERNAME=
-NEXT_PUBLIC_TURN_CREDENTIAL=
 NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all
+TURN_URLS=
+TURN_USERNAME=sakura
+TURN_PASSWORD=
 TURN_MODE=auto
-TURN_ENABLED=0
 OCI_TURN_INSTANCE_ID=
 OCI_TURN_SSH_USER=ubuntu
 OCI_TURN_SSH_KEY_FILE=
@@ -137,11 +139,10 @@ Notes:
 - `TRANSLATION_MODEL` defaults to `gpt-4o-mini` when unset.
 - Transcription defaults to `gpt-4o-transcribe`; override with `TRANSCRIPTION_MODEL`.
 - `NEXT_PUBLIC_STUN_URLS` can be a comma-separated list of STUN URLs.
-- `NEXT_PUBLIC_TURN_URLS` can be a comma-separated list of TURN URLs. Set `NEXT_PUBLIC_TURN_USERNAME` and `NEXT_PUBLIC_TURN_CREDENTIAL` with it.
 - `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=relay` forces TURN-only media for testing. Leave it as `all` for normal fallback behavior.
-- `NEXT_PUBLIC_*` TURN credentials are visible to browsers. This is acceptable for private local testing, but use short-lived server-generated TURN credentials before opening the app to untrusted users.
-- `TURN_ENABLED=0` keeps `run.sh` from starting TURN at startup. This is the default so calls try peer-to-peer first; the host relay button starts the OCI TURN VM only when fallback is needed.
-- `TURN_MODE=auto` uses the OCI TURN VM when `OCI_TURN_INSTANCE_ID` is set, otherwise it falls back to the local Docker coturn container.
+- `TURN_URLS`, `TURN_USERNAME`, and `TURN_PASSWORD` are server-only fallback TURN settings. The app only returns TURN ICE config to browsers that have joined the room with a valid participant session.
+- `run.sh` does not start TURN at startup. Calls try peer-to-peer first; the host relay button starts the OCI TURN VM only when fallback is needed.
+- `TURN_MODE=auto` is kept for older manual scripts; the normal `run.sh` path uses on-demand OCI TURN from the room UI.
 - `OCI_TURN_STOP_INSTANCE_ON_EXIT=1` stops the OCI TURN VM when `run.sh` exits, matching the on-demand usage model.
 - `OCI_USER_OCID`, `OCI_FINGERPRINT`, `OCI_TENANCY_OCID`, `OCI_REGION`, and `OCI_PRIVATE_KEY_FILE` are used by `run.sh` to create a temporary OCI CLI config. Lowercase OCI variable names from the Oracle download also work.
 - `ROOM_OWNER_TOKEN` is the private passcode used to unlock host mode in Settings. Room creation is disabled when neither `ROOM_OWNER_TOKEN` nor `CLOUDFLARE_CALL_API_TOKEN` is set.
@@ -179,14 +180,14 @@ TURN_USERNAME=sakura TURN_PASSWORD=change-me docker compose -f docker-compose.tu
 Then point WebRTC at it:
 
 ```bash
-NEXT_PUBLIC_TURN_URLS=turn:localhost:3478?transport=udp,turn:localhost:3478?transport=tcp
-NEXT_PUBLIC_TURN_USERNAME=sakura
-NEXT_PUBLIC_TURN_CREDENTIAL=
+TURN_URLS=turn:localhost:3478?transport=udp,turn:localhost:3478?transport=tcp
+TURN_USERNAME=sakura
+TURN_PASSWORD=change-me
 ```
 
-For remote callers, `localhost` is not enough. The TURN server must be reachable by both browsers on a public IP or hostname with UDP/TCP `3478` and the relay port range open. When running coturn on a public host, set `TURN_EXTERNAL_IP` to that host's public IP and use that same IP or hostname in `NEXT_PUBLIC_TURN_URLS`.
+For remote callers, `localhost` is not enough. The TURN server must be reachable by both browsers on a public IP or hostname with UDP/TCP `3478` and the relay port range open. When running coturn on a public host, set `TURN_EXTERNAL_IP` to that host's public IP and use that same IP or hostname in `TURN_URLS`.
 
-`run.sh` does not start TURN automatically. With `OCI_TURN_INSTANCE_ID` set, the host can start the fallback relay from the room UI. The app starts the OCI VM if needed, waits for SSH, starts coturn with a per-run TURN password when no password is configured, and exposes the TURN ICE config to both browsers after the relay is ready. Use `TURN_ENABLED=1 ./run.sh` only for the older startup behavior or local TURN testing.
+`run.sh` does not start TURN automatically. With `OCI_TURN_INSTANCE_ID` set, the host can start the fallback relay from the room UI. The app starts the OCI VM if needed, waits for SSH, starts coturn with a per-run TURN password when no password is configured, and exposes the TURN ICE config only to browsers that have joined the room with a valid participant session.
 
 Cloudflare Tunnel only exposes the HTTP app. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
 
@@ -302,8 +303,9 @@ npm run build         # Build the Next.js app
 10. Socket.IO joins both participants into the room and exchanges WebRTC offer/answer/ICE signaling.
 11. WebRTC sends audio, video, and screen sharing peer-to-peer where the network allows it.
 12. The host starts the subtitle service.
-13. Each browser captures its own microphone audio, segments speech, and emits audio chunks to the server.
-14. The server transcribes the speaker's audio, renders captions in each viewer's selected language, and sends a preview caption back to the speaker.
+13. Each browser shows a captions privacy notice before it sends any local microphone audio for captions.
+14. After that browser accepts, it captures its own microphone audio, segments speech, and emits audio chunks to the server.
+15. The server transcribes the speaker's audio, renders captions in each viewer's selected language, and sends a preview caption back to the speaker.
 
 Remote audio is not transcribed. Each browser only submits its own local microphone audio.
 
@@ -316,6 +318,9 @@ The intended meeting UI supports three modes: audio call, video call, and screen
 ## Security And Privacy Notes
 
 - The OpenAI API key is only used by server-side modules.
+- Audio, video, and screen sharing use encrypted WebRTC media transport between browsers.
+- Captions/translations are optional and are not end-to-end encrypted because local microphone segments are processed by this server and OpenAI.
+- Each browser must accept the captions privacy notice before it sends local microphone audio for captions.
 - Room state is in memory only.
 - Room codes are never placed in URLs or localStorage.
 - Room creation requires an HTTP-only owner session cookie.
@@ -325,6 +330,8 @@ The intended meeting UI supports three modes: audio call, video call, and screen
 - Invalid room-code attempts are rate-limited.
 - Audio segment payloads are size-limited.
 - Socket join, subtitle start, and audio events are rate-limited.
+- The app advertises `Disallow: /` in `robots.txt` because it is private and on-demand. This only affects polite crawlers; scanners and abuse traffic can ignore it.
+- If the Cloudflare hostname is left reachable for more than a short call, add Cloudflare WAF or rate-limit rules for `/api/ice-servers`, `/api/turn/status`, `/api/owner`, and `/socket.io/*`.
 - `.env`, `.env.local`, build output, dependency folders, logs, and caches are ignored by Git.
 
 ## Cloudflare Domain And Tunnel Setup
@@ -437,7 +444,7 @@ You can also use the convenience script:
 ./run.sh
 ```
 
-`run.sh` starts the OCI TURN VM when configured, waits for SSH, starts coturn, builds the app with that run's TURN host, starts the production server on port `3010`, starts the tunnel, and stops all of them when you press `Ctrl+C`. If OCI is not configured, it falls back to the local Docker coturn container.
+`run.sh` builds the app, starts the production server on port `3010`, starts the tunnel, and stops them when you press `Ctrl+C`. TURN stays off until the host starts the fallback relay from the room UI; if the app started the relay, it stops it on exit.
 
 ## Testing With Another Person
 
@@ -450,11 +457,12 @@ You can also use the convenience script:
 7. The other person opens the site, chooses their language, enters their name, and enters the code.
 8. Both people allow the needed media permissions and join.
 9. The host starts the subtitle service.
-10. Speak naturally. The main subtitle area shows the other person's translated speech, and the preview subtitle area shows what your speech looks like after translation.
+10. Each browser accepts the captions privacy notice if that person wants their speech transcribed and translated.
+11. Speak naturally. The main subtitle area shows the other person's translated speech, and the preview subtitle area shows what your speech looks like after translation.
 
 If the host leaves, the other participant sees a `Call host has left` notice before returning to the home screen.
 
-If the WebRTC media connection fails on a restrictive network, configure TURN. The app uses STUN by default and falls back to TURN when `NEXT_PUBLIC_TURN_URLS`, `NEXT_PUBLIC_TURN_USERNAME`, and `NEXT_PUBLIC_TURN_CREDENTIAL` are set.
+If the WebRTC media connection fails on a restrictive network, use the host fallback relay button. The app uses STUN by default and falls back to TURN only after a joined room participant receives authenticated ICE config.
 
 ## Limitations
 

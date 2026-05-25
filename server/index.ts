@@ -13,6 +13,7 @@ import {
   getRoom,
   getRoomByCode,
   isCreatorSecret,
+  isRoomParticipantSession,
   roomExists
 } from "./rooms";
 import {
@@ -132,6 +133,20 @@ function isOwnerRequest(request: IncomingMessage) {
   return Boolean(actual && constantTimeEqual(actual, expected));
 }
 
+function ownerSessionCookie(request: IncomingMessage) {
+  return `${ownerCookieName}=${encodeURIComponent(
+    ownerSessionValue()
+  )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ownerSessionMaxAge}${
+    shouldUseSecureCookie(request) ? "; Secure" : ""
+  }`;
+}
+
+function clearOwnerSessionCookie(request: IncomingMessage) {
+  return `${ownerCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${
+    shouldUseSecureCookie(request) ? "; Secure" : ""
+  }`;
+}
+
 function isLocalHost(host: string) {
   return (
     /^localhost$/i.test(host) ||
@@ -210,19 +225,29 @@ function parseUrlList(value: string | undefined) {
     .filter(Boolean);
 }
 
-function configuredIceServers() {
+function configuredIceServers({ includeTurn = false } = {}) {
   const stunUrls = parseUrlList(process.env.NEXT_PUBLIC_STUN_URLS);
-  const turnUrls = parseUrlList(process.env.NEXT_PUBLIC_TURN_URLS);
-  const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME;
-  const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+  const turnUrls = parseUrlList(
+    process.env.TURN_URLS || process.env.NEXT_PUBLIC_TURN_URLS
+  );
+  const turnUsername =
+    process.env.TURN_USERNAME || process.env.NEXT_PUBLIC_TURN_USERNAME;
+  const turnCredential =
+    process.env.TURN_PASSWORD || process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
   const iceServers: RTCIceServer[] = [
     { urls: stunUrls && stunUrls.length > 0 ? stunUrls : defaultStunUrls }
   ];
   const activeTurnIceServer = getActiveTurnIceServer();
 
-  if (activeTurnIceServer) {
+  if (includeTurn && activeTurnIceServer) {
     iceServers.push(activeTurnIceServer);
-  } else if (turnUrls && turnUrls.length > 0 && turnUsername && turnCredential) {
+  } else if (
+    includeTurn &&
+    turnUrls &&
+    turnUrls.length > 0 &&
+    turnUsername &&
+    turnCredential
+  ) {
     iceServers.push({
       urls: turnUrls,
       username: turnUsername,
@@ -272,18 +297,24 @@ async function handleOwnerApi(request: IncomingMessage, response: ServerResponse
       return true;
     }
 
-    const cookie = `${ownerCookieName}=${encodeURIComponent(
-      ownerSessionValue()
-    )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ownerSessionMaxAge}${
-      shouldUseSecureCookie(request) ? "; Secure" : ""
-    }`;
-
     sendJson(
       response,
       200,
       { isOwner: true },
       {
-        "set-cookie": cookie
+        "set-cookie": ownerSessionCookie(request)
+      }
+    );
+    return true;
+  }
+
+  if (request.method === "DELETE" && url.pathname === "/api/owner/session") {
+    sendJson(
+      response,
+      200,
+      { isOwner: false },
+      {
+        "set-cookie": clearOwnerSessionCookie(request)
       }
     );
     return true;
@@ -295,9 +326,29 @@ async function handleOwnerApi(request: IncomingMessage, response: ServerResponse
 async function handleTurnApi(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
 
-  if (request.method === "GET" && url.pathname === "/api/ice-servers") {
+  if (request.method === "POST" && url.pathname === "/api/ice-servers") {
+    const body = (await readJson(request).catch(() => null)) as {
+      roomId?: unknown;
+      participantId?: unknown;
+      participantSessionToken?: unknown;
+    } | null;
+    const roomId = typeof body?.roomId === "string" ? body.roomId : "";
+    const participantId =
+      typeof body?.participantId === "string" ? body.participantId : "";
+
+    if (
+      !isRoomParticipantSession(
+        roomId,
+        participantId,
+        body?.participantSessionToken
+      )
+    ) {
+      sendJson(response, 403, { error: "participant-session-required" });
+      return true;
+    }
+
     sendJson(response, 200, {
-      iceServers: configuredIceServers(),
+      iceServers: configuredIceServers({ includeTurn: true }),
       iceTransportPolicy:
         process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY === "relay"
           ? "relay"

@@ -167,6 +167,17 @@ export function isCreatorSecret(roomId: string, secret: string | undefined) {
   return Boolean(room && secret && room.creatorSecret === secret);
 }
 
+export function isRoomParticipantSession(
+  roomId: string,
+  participantId: string,
+  participantSessionToken: unknown
+) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+
+  return isParticipantSessionToken(participant, participantSessionToken);
+}
+
 export type JoinFailureReason =
   | "ROOM_NOT_FOUND"
   | "INVALID_CODE"

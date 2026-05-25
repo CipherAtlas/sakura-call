@@ -315,6 +315,39 @@ function hasLiveVideoTrack(stream: MediaStream | null): stream is MediaStream {
   );
 }
 
+function isScreenShareSurfaceId(surfaceId: MediaSurfaceId | null) {
+  return surfaceId === "local-screen" || surfaceId === "remote-screen";
+}
+
+function getLockableScreenOrientation() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return (
+    (window.screen.orientation as
+      | {
+          lock?: (orientation: "landscape") => Promise<void>;
+          unlock?: () => void;
+        }
+      | undefined) ?? null
+  );
+}
+
+async function lockScreenToLandscape() {
+  await getLockableScreenOrientation()?.lock?.("landscape").catch(() => {
+    return undefined;
+  });
+}
+
+function unlockScreenOrientation() {
+  try {
+    getLockableScreenOrientation()?.unlock?.();
+  } catch {
+    return undefined;
+  }
+}
+
 function appendCaptionLog(log: CaptionEvent[], caption: CaptionEvent) {
   return [
     ...log.filter(
@@ -354,6 +387,26 @@ function attachStreamToVideo(
   }
 }
 
+function attachStreamToAudio(
+  audio: HTMLAudioElement | null,
+  stream: MediaStream | null,
+) {
+  if (!audio) {
+    return;
+  }
+
+  if (audio.srcObject !== stream) {
+    audio.srcObject = stream;
+  }
+
+  audio.muted = false;
+  audio.volume = 1;
+
+  if (stream) {
+    void audio.play().catch(() => undefined);
+  }
+}
+
 function turnStatusLabel(language: Language, status: TurnStatus | null) {
   switch (status?.phase) {
     case "disabled":
@@ -384,6 +437,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const socket = useMemo(() => getSocket(), []);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const localScreenRef = useRef<HTMLVideoElement>(null);
   const remoteScreenRef = useRef<HTMLVideoElement>(null);
   const fullscreenShellRef = useRef<HTMLElement>(null);
@@ -450,6 +504,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     useState(false);
   const [isStartingSubtitleService, setIsStartingSubtitleService] =
     useState(false);
+  const [hasAcceptedCaptionProcessing] = useState(true);
   const [partialCaption, setPartialCaption] = useState<CaptionEvent | null>(
     null,
   );
@@ -467,6 +522,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [showSubtitleNotice, setShowSubtitleNotice] = useState(false);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [isTurnActionPending, setIsTurnActionPending] = useState(false);
+  const isFullscreenScreenShare = isScreenShareSurfaceId(fullscreenSurface);
 
   const showSubtitleServiceBanner = useCallback(
     (noticeKey: SubtitleNoticeKey) => {
@@ -622,6 +678,18 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [fullscreenSurface]);
 
   useEffect(() => {
+    if (!isFullscreenScreenShare) {
+      return;
+    }
+
+    void lockScreenToLandscape();
+
+    return () => {
+      unlockScreenOrientation();
+    };
+  }, [isFullscreenScreenShare]);
+
+  useEffect(() => {
     const localVideo = localVideoRef.current;
     if (localVideo && localStreamRef.current) {
       attachStreamToVideo(
@@ -671,6 +739,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
     hasRemoteScreenShare,
     smallSurface,
   ]);
+
+  const playRemoteAudio = useCallback(() => {
+    attachStreamToAudio(remoteAudioRef.current, remoteAudioStreamRef.current);
+  }, []);
 
   const stopLocalSpeakingMonitor = useCallback(() => {
     stopSpeakingMonitor(
@@ -764,6 +836,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     remoteScreenStreamRef.current = remoteScreenStream;
 
     attachStreamToVideo(remoteVideoRef.current, remoteCameraStream);
+    attachStreamToAudio(remoteAudioRef.current, remoteAudioStream);
 
     attachStreamToVideo(remoteScreenRef.current, remoteScreenStream);
 
@@ -811,6 +884,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
         targetStream.addTrack(event.track);
       }
 
+      if (event.track.kind === "audio") {
+        attachStreamToAudio(remoteAudioRef.current, remoteAudioStream);
+        event.track.onunmute = () => {
+          attachStreamToAudio(remoteAudioRef.current, remoteAudioStream);
+        };
+      }
+
       event.track.onended = () => {
         remoteVideoTrackStreamIdsRef.current.delete(event.track.id);
         updateRemoteMediaState();
@@ -847,6 +927,24 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return peerConnection;
   }, [roomId, socket, startRemoteSpeakingMonitor, updateRemoteMediaState]);
 
+  const refreshIceServersForRoom = useCallback(
+    async (peerConnection: RTCPeerConnection) => {
+      const participantId = participantIdRef.current;
+      const participantSessionToken = participantSessionTokenRef.current;
+
+      if (!participantId || !participantSessionToken) {
+        return false;
+      }
+
+      return refreshPeerConnectionIceServers(peerConnection, {
+        roomId,
+        participantId,
+        participantSessionToken,
+      });
+    },
+    [roomId],
+  );
+
   const createAndSendOffer = useCallback(async ({ iceRestart = false } = {}) => {
     const peerConnection = ensurePeerConnection();
 
@@ -854,7 +952,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
-    await refreshPeerConnectionIceServers(peerConnection).catch(() => false);
+    await refreshIceServersForRoom(peerConnection).catch(() => false);
     const offer = await peerConnection.createOffer({
       iceRestart,
       offerToReceiveAudio: true,
@@ -867,7 +965,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       from: participantIdRef.current,
       description: peerConnection.localDescription,
     });
-  }, [ensurePeerConnection, roomId, socket]);
+  }, [ensurePeerConnection, refreshIceServersForRoom, roomId, socket]);
 
   const loadTurnStatus = useCallback(async () => {
     const response = await fetch("/api/turn/status", {
@@ -1016,6 +1114,16 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setLocalPartialCaption(null);
   }, []);
 
+  const beginLocalSubtitleCapture = useCallback(async () => {
+    const started = await startLocalSubtitleCapture();
+
+    if (!started) {
+      setError(t(languageRef.current, "subtitleServiceUnavailable"));
+    }
+
+    return started;
+  }, [startLocalSubtitleCapture]);
+
   const rememberParticipantSessionToken = useCallback(
     (token: string) => {
       participantSessionTokenRef.current = token;
@@ -1078,6 +1186,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+    }
     if (remoteScreenRef.current) {
       remoteScreenRef.current.srcObject = null;
     }
@@ -1112,7 +1223,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       from: string;
     }) {
       const peerConnection = ensurePeerConnection();
-      await refreshPeerConnectionIceServers(peerConnection).catch(() => false);
+      await refreshIceServersForRoom(peerConnection).catch(() => false);
       await peerConnection.setRemoteDescription(payload.description);
       await flushPendingIceCandidates(peerConnection);
       const answer = await peerConnection.createAnswer();
@@ -1178,11 +1289,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     async function handleSubtitleServiceStarted() {
       setIsSubtitleServiceStarted(true);
       showSubtitleServiceBanner("subtitleServiceStartedNotice");
-      const started = await startLocalSubtitleCapture();
-
-      if (!started) {
-        setError(t(languageRef.current, "subtitleServiceUnavailable"));
-      }
+      await beginLocalSubtitleCapture();
     }
 
     function handleSubtitleServiceStopped() {
@@ -1318,7 +1425,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             response.otherParticipants[0]?.displayName ?? "",
           );
           if (response.subtitleServiceStarted) {
-            void startLocalSubtitleCapture();
+            void beginLocalSubtitleCapture();
           }
           if (response.isCreator && response.otherParticipants.length > 0) {
             await createAndSendOffer();
@@ -1377,8 +1484,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     resetRemoteMediaState,
     flushPendingIceCandidates,
     rememberParticipantSessionToken,
+    refreshIceServersForRoom,
     showSubtitleServiceBanner,
-    startLocalSubtitleCapture,
+    beginLocalSubtitleCapture,
     stopLocalSubtitleCapture,
     updateRemoteMediaState,
   ]);
@@ -1506,7 +1614,49 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
+  const connectSocketForRoomJoin = useCallback(
+    async ({ refreshHandshake }: { refreshHandshake: boolean }) => {
+      if (!refreshHandshake && socket.connected) {
+        return;
+      }
+
+      if (refreshHandshake && socket.connected) {
+        socket.disconnect();
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          cleanup();
+          reject(new Error("socket-connect-timeout"));
+        }, 8000);
+
+        function cleanup() {
+          window.clearTimeout(timeout);
+          socket.off("connect", handleConnect);
+          socket.off("connect_error", handleConnectError);
+        }
+
+        function handleConnect() {
+          cleanup();
+          resolve();
+        }
+
+        function handleConnectError(error: Error) {
+          cleanup();
+          reject(error);
+        }
+
+        socket.once("connect", handleConnect);
+        socket.once("connect_error", handleConnectError);
+        socket.connect();
+      });
+    },
+    [socket],
+  );
+
   async function handleJoinCall(preparedStream?: MediaStream) {
+    playRemoteAudio();
+
     if (!language || !roomInfo) {
       return;
     }
@@ -1535,8 +1685,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
     const streamForJoin = stream;
 
-    if (!socket.connected) {
-      socket.connect();
+    try {
+      await connectSocketForRoomJoin({
+        refreshHandshake: roomInfo.isCreator,
+      });
+    } catch {
+      setCallState("idle");
+      setError(t(language, "disconnected"));
+      resetLocalMediaState();
+      return;
     }
 
     socket.emit(
@@ -1576,7 +1733,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         }
 
         if (response.subtitleServiceStarted) {
-          await startLocalSubtitleCapture();
+          await beginLocalSubtitleCapture();
         }
 
         if (response.isCreator && response.otherParticipants.length > 0) {
@@ -1623,6 +1780,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   function handleToggleMute() {
+    playRemoteAudio();
+
     const nextMuted = !isMuted;
     for (const track of localStreamRef.current?.getAudioTracks() ?? []) {
       track.enabled = !nextMuted;
@@ -1631,6 +1790,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   async function handleToggleCamera() {
+    playRemoteAudio();
+
     const stream = localStreamRef.current;
     if (!stream) {
       if (isMediaReady) {
@@ -1729,6 +1890,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   async function handleToggleScreenShare() {
+    playRemoteAudio();
+
     if (isScreenSharing) {
       await stopScreenShare();
       return;
@@ -1790,8 +1953,43 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
+  function requestSubtitleServiceStart() {
+    if (isStartingSubtitleService) {
+      return;
+    }
+
+    setIsStartingSubtitleService(true);
+    socket.emit(
+      "subtitle:start-service",
+      {
+        roomId,
+        participantId: participantIdRef.current,
+      },
+      async (response: StartSubtitleServiceResponse) => {
+        setIsStartingSubtitleService(false);
+
+        if (!response.ok) {
+          setError(t(languageRef.current, "subtitleServiceUnavailable"));
+          return;
+        }
+
+        setIsSubtitleServiceStarted(true);
+        await beginLocalSubtitleCapture();
+      },
+    );
+  }
+
   function handleToggleSubtitleService() {
-    if (!isRoomHost || isStartingSubtitleService) {
+    playRemoteAudio();
+
+    if (isStartingSubtitleService) {
+      return;
+    }
+
+    if (!isRoomHost) {
+      if (isSubtitleServiceStarted) {
+        void beginLocalSubtitleCapture();
+      }
       return;
     }
 
@@ -1815,29 +2013,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
-    setIsStartingSubtitleService(true);
-    socket.emit(
-      "subtitle:start-service",
-      {
-        roomId,
-        participantId: participantIdRef.current,
-      },
-      async (response: StartSubtitleServiceResponse) => {
-        setIsStartingSubtitleService(false);
-
-        if (!response.ok) {
-          setError(t(languageRef.current, "subtitleServiceUnavailable"));
-          return;
-        }
-
-        setIsSubtitleServiceStarted(true);
-        const started = await startLocalSubtitleCapture();
-
-        if (!started) {
-          setError(t(languageRef.current, "subtitleServiceUnavailable"));
-        }
-      },
-    );
+    requestSubtitleServiceStart();
   }
 
   function handleLeaveCall() {
@@ -2043,6 +2219,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   function handleSelectMediaSlot(slot: MediaSurfaceSlot) {
+    playRemoteAudio();
+
     if (!isConversationVisible) {
       if (resolvedDominantSurface && resolvedSmallSurface) {
         setDominantSurface(resolvedSmallSurface);
@@ -2059,37 +2237,44 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }
 
   function handleToggleConversationVisibility() {
-    setIsConversationVisible((current) => {
-      const nextValue = !current;
+    playRemoteAudio();
+    setIsConversationVisible((isVisible) => {
+      const nextIsVisible = !isVisible;
 
-      if (!nextValue) {
-        setShowLayoutPicker(false);
-        setIsSmallSurfaceHidden(false);
-
-        if (!resolvedSmallSurface && resolvedDominantSurface) {
-          setSmallSurface(
-            availableSurfaceIds.find((id) => id !== resolvedDominantSurface) ??
-              null,
-          );
-        }
+      if (nextIsVisible) {
+        window.requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>(".conversation-scroll")?.focus(),
+        );
       }
 
-      return nextValue;
+      return nextIsVisible;
     });
   }
 
   function handleEnterFullscreen(surfaceId: MediaSurfaceId) {
+    playRemoteAudio();
+
     setFullscreenSurface(surfaceId);
     setIsFullscreenConversationExpanded(true);
 
+    const shouldLockLandscape = isScreenShareSurfaceId(surfaceId);
+    let fullscreenRequest: Promise<void> | undefined;
+
     if (!document.fullscreenElement) {
-      const request = document.documentElement.requestFullscreen?.();
-      void request?.catch(() => undefined);
+      fullscreenRequest = document.documentElement.requestFullscreen?.();
+      void fullscreenRequest?.catch(() => undefined);
+    }
+
+    if (shouldLockLandscape) {
+      void Promise.resolve(fullscreenRequest)
+        .then(() => lockScreenToLandscape())
+        .catch(() => undefined);
     }
   }
 
   function handleExitFullscreen() {
     setFullscreenSurface(null);
+    unlockScreenOrientation();
 
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
@@ -2142,11 +2327,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
         <span className="call-control-label">{t(language, "micControl")}</span>
       </button>
 
-      {isRoomHost ? (
+      {isRoomHost || (isSubtitleServiceStarted && !hasAcceptedCaptionProcessing) ? (
         <button
           type="button"
           aria-label={
-            isSubtitleServiceStarted
+            !isRoomHost
+              ? t(language, "captionPrivacyConfirm")
+              : isSubtitleServiceStarted
               ? t(language, "stopSubtitleService")
               : t(language, "startSubtitleService")
           }
@@ -2349,10 +2536,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
   return (
     <main
-      className={`garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8 ${
+      className={`sakura-home call-room-scene garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8 ${
         callState === "idle" ? "" : "call-scene-active"
       } ${isConversationVisible ? "" : "is-conversation-hidden"}`}
     >
+      <audio ref={remoteAudioRef} autoPlay playsInline />
+
       {showSubtitleNotice && language ? (
         <div className="pointer-events-none fixed inset-x-0 top-0 z-40 px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-6 lg:px-8">
           <div
@@ -2375,8 +2564,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
       ) : null}
 
       <div
-        className={`mx-auto grid w-full gap-3 ${
-          callState === "idle" ? "max-w-xl" : "max-w-[min(96rem,100%)]"
+        className={`call-shell mx-auto grid w-full gap-3 ${
+          callState === "idle"
+            ? `call-shell-setup max-w-6xl ${isMediaReady ? "is-media-ready" : ""}`
+            : "call-shell-live max-w-[min(96rem,100%)]"
         } ${
           callState === "idle"
             ? "overflow-visible"
@@ -2439,7 +2630,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 >
                   <Copy className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span className="truncate whitespace-nowrap font-black">
-                    Room Code: {hostRoomCode}
+                    {hostRoomCode}
                   </span>
                 </button>
               ) : null}
@@ -2486,14 +2677,18 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   type="button"
                   onClick={handlePrepareMedia}
                   disabled={!canPrepareMedia}
-                  className="garden-button garden-button-secondary mt-4 h-14 w-full gap-2 px-5 text-base"
+                  className={`garden-button setup-state-button mt-4 h-14 w-full gap-2 px-5 text-base ${
+                    isMediaReady ? "is-on" : "is-off"
+                  }`}
                 >
                   <Mic className="h-5 w-5" aria-hidden="true" />
-                  {isPreparingMedia
-                    ? t(language, "preparingPermissions")
-                    : isMediaReady
-                      ? t(language, "permissionsReady")
-                      : t(language, "allowPermissions")}
+                  <span>
+                    {isPreparingMedia
+                      ? t(language, "preparingPermissions")
+                      : isMediaReady
+                        ? t(language, "permissionsReady")
+                        : t(language, "allowPermissions")}
+                  </span>
                 </button>
 
                 {isMediaReady ? (
@@ -2526,16 +2721,18 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   </div>
                 ) : null}
 
-                <div className="mt-4 grid gap-3">
+                <div className="setup-start-options mt-4 grid gap-3">
                   <p className="garden-text-muted text-sm font-black">
                     {t(language, "mediaStartOptions")}
                   </p>
-                  <div className="grid grid-cols-1 gap-3">
+                  <div className="setup-start-grid grid grid-cols-1 gap-3">
                     <button
                       type="button"
                       onClick={handleToggleMute}
                       disabled={isPreparingMedia}
-                      className="garden-button garden-button-quiet h-14 gap-2 px-3 text-sm sm:text-base"
+                      className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
+                        isMuted ? "is-off" : "is-on"
+                      }`}
                     >
                       {isMuted ? (
                         <MicOff className="h-5 w-5" aria-hidden="true" />
@@ -2551,7 +2748,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
                         type="button"
                         onClick={handleToggleCamera}
                         disabled={isPreparingMedia}
-                        className="garden-button garden-button-quiet h-14 gap-2 px-3 text-sm sm:text-base"
+                        className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
+                          isCameraOnForControls ? "is-on" : "is-off"
+                        }`}
                       >
                         {isCameraOnForControls ? (
                           <Camera className="h-5 w-5" aria-hidden="true" />
@@ -2565,6 +2764,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
                     ) : null}
                   </div>
                 </div>
+
+                {isMediaReady ? (
+                  <button
+                    type="button"
+                    disabled={!canJoin}
+                    onClick={() => void handleJoinCall()}
+                    className="garden-button garden-button-primary setup-join-button mt-4 h-16 w-full px-5 text-xl"
+                  >
+                    {t(language, "joinCall")}
+                  </button>
+                ) : null}
               </section>
 
               {error || cameraError ? (
@@ -2580,22 +2790,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
                     </p>
                   ) : null}
                 </div>
-              ) : null}
-
-              {isMediaReady ? (
-                <section
-                  aria-label={t(language, "callControls")}
-                  className="garden-panel p-3"
-                >
-                  <button
-                    type="button"
-                    disabled={!canJoin}
-                    onClick={() => void handleJoinCall()}
-                    className="garden-button garden-button-primary h-16 w-full px-5 text-xl"
-                  >
-                    {t(language, "joinCall")}
-                  </button>
-                </section>
               ) : null}
             </>
           ) : (
@@ -2659,7 +2853,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
       {fullscreenSurface && language ? (
         <section
           ref={fullscreenShellRef}
-          className="media-fullscreen-shell"
+          className={`media-fullscreen-shell ${
+            isFullscreenScreenShare ? "is-screen-share-fullscreen" : ""
+          }`}
           aria-label={t(language, "fullscreenSurface")}
         >
           <div className="media-fullscreen-stage">
@@ -2689,7 +2885,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             <button
               type="button"
               onClick={() => openLayoutPicker("dominant")}
-              className="media-fullscreen-control"
+              className="media-fullscreen-control media-fullscreen-control-pick"
             >
               <Pin className="h-4 w-4" aria-hidden="true" />
               <span>{t(language, "chooseDominantView")}</span>
@@ -2700,7 +2896,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 onClick={() =>
                   setIsFullscreenConversationExpanded((value) => !value)
                 }
-                className="media-fullscreen-control"
+                className="media-fullscreen-control media-fullscreen-control-captions"
               >
                 <Captions className="h-4 w-4" aria-hidden="true" />
                 <span>
@@ -2713,7 +2909,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             <button
               type="button"
               onClick={handleExitFullscreen}
-              className="media-fullscreen-control"
+              className="media-fullscreen-control media-fullscreen-control-exit"
             >
               <Minimize2 className="h-4 w-4" aria-hidden="true" />
               <span>{t(language, "exitFullscreen")}</span>
@@ -2731,7 +2927,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             <button
               type="button"
               onClick={() => setIsFullscreenConversationExpanded(true)}
-              className="media-fullscreen-chat-pill"
+              className="media-fullscreen-chat-pill media-fullscreen-control-captions"
             >
               <Captions className="h-4 w-4" aria-hidden="true" />
               <span>{t(language, "conversation")}</span>
