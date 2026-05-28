@@ -1,16 +1,84 @@
-export const supportedLanguages = ["en", "ja"] as const;
+export const supportedLanguageOptions = [
+  { code: "af", label: "Afrikaans" },
+  { code: "ar", label: "Arabic" },
+  { code: "hy", label: "Armenian" },
+  { code: "az", label: "Azerbaijani" },
+  { code: "be", label: "Belarusian" },
+  { code: "bs", label: "Bosnian" },
+  { code: "bg", label: "Bulgarian" },
+  { code: "ca", label: "Catalan" },
+  { code: "zh", label: "Chinese" },
+  { code: "hr", label: "Croatian" },
+  { code: "cs", label: "Czech" },
+  { code: "da", label: "Danish" },
+  { code: "nl", label: "Dutch" },
+  { code: "en", label: "English" },
+  { code: "et", label: "Estonian" },
+  { code: "fi", label: "Finnish" },
+  { code: "fr", label: "French" },
+  { code: "gl", label: "Galician" },
+  { code: "de", label: "German" },
+  { code: "el", label: "Greek" },
+  { code: "he", label: "Hebrew" },
+  { code: "hi", label: "Hindi" },
+  { code: "hu", label: "Hungarian" },
+  { code: "is", label: "Icelandic" },
+  { code: "id", label: "Indonesian" },
+  { code: "it", label: "Italian" },
+  { code: "ja", label: "Japanese" },
+  { code: "kn", label: "Kannada" },
+  { code: "kk", label: "Kazakh" },
+  { code: "ko", label: "Korean" },
+  { code: "lv", label: "Latvian" },
+  { code: "lt", label: "Lithuanian" },
+  { code: "mk", label: "Macedonian" },
+  { code: "ms", label: "Malay" },
+  { code: "mr", label: "Marathi" },
+  { code: "mi", label: "Maori" },
+  { code: "ne", label: "Nepali" },
+  { code: "no", label: "Norwegian" },
+  { code: "fa", label: "Persian" },
+  { code: "pl", label: "Polish" },
+  { code: "pt", label: "Portuguese" },
+  { code: "ro", label: "Romanian" },
+  { code: "ru", label: "Russian" },
+  { code: "sr", label: "Serbian" },
+  { code: "sk", label: "Slovak" },
+  { code: "sl", label: "Slovenian" },
+  { code: "es", label: "Spanish" },
+  { code: "sw", label: "Swahili" },
+  { code: "sv", label: "Swedish" },
+  { code: "tl", label: "Tagalog" },
+  { code: "ta", label: "Tamil" },
+  { code: "th", label: "Thai" },
+  { code: "tr", label: "Turkish" },
+  { code: "uk", label: "Ukrainian" },
+  { code: "ur", label: "Urdu" },
+  { code: "vi", label: "Vietnamese" },
+  { code: "cy", label: "Welsh" }
+] as const;
 
-export type Language = (typeof supportedLanguages)[number];
+export type Language = (typeof supportedLanguageOptions)[number]["code"];
+type UiLanguage = "en" | "ja";
+
+export const supportedLanguages: readonly Language[] =
+  supportedLanguageOptions.map(({ code }) => code);
 
 export const languageLabel = (language: Language) =>
-  language === "en" ? "English" : "日本語";
+  supportedLanguageOptions.find(({ code }) => code === language)?.label ??
+  language;
+
+export const languageName = languageLabel;
 
 export function isSupportedLanguage(value: unknown): value is Language {
-  return value === "en" || value === "ja";
+  return (
+    typeof value === "string" &&
+    supportedLanguages.includes(value as Language)
+  );
 }
 
-export function oppositeLanguage(language: Language): Language {
-  return language === "en" ? "ja" : "en";
+function uiLanguageFor(language: Language): UiLanguage {
+  return language === "ja" ? "ja" : "en";
 }
 
 const storageKey = "jec.language";
@@ -70,7 +138,7 @@ const strings = {
   en: {
     appName: "Sakura Call",
     homeTitle: "Start a private call",
-    homeFootnote: "Two people only. English and Japanese only.",
+    homeFootnote: "Two people only. Captions translate between supported languages.",
     createRoom: "Create Room",
     creatingRoom: "Creating room...",
     createRoomFailed: "Could not create room",
@@ -179,6 +247,7 @@ const strings = {
     micControl: "Mic",
     cameraControl: "Camera",
     shareControl: "Share",
+    qualityControl: "Quality",
     settingsControl: "Settings",
     leaveControl: "Leave",
     captionsControl: "Captions",
@@ -224,12 +293,58 @@ const strings = {
     cameraUnavailable: "Camera unavailable",
     microphoneUnavailable: "Microphone unavailable",
     openSettings: "Open settings",
-    closeSettings: "Close settings"
+    closeSettings: "Close settings",
+    openScreenQuality: "Open screen quality settings",
+    closeScreenQuality: "Close screen quality settings",
+    screenQualityKicker: "Screen quality",
+    screenQualityTitle: "Share screen",
+    screenQualityLiveTitle: "Screen quality",
+    screenQualityHelp:
+      "Choose clarity, motion, and bandwidth before selecting a screen.",
+    screenQualityLiveHelp:
+      "Changes apply to the active screen share when the browser allows it.",
+    screenQualityPreset: "Preset",
+    screenQualityDetail: "Text clarity",
+    screenQualityDetailHelp: "Sharper text with a lower motion load.",
+    screenQualityBalanced: "Balanced",
+    screenQualityBalancedHelp: "1080p with smooth everyday sharing.",
+    screenQualityMotion: "Motion",
+    screenQualityMotionHelp: "Higher frame rate for video or demos.",
+    screenQualityUltra: "4K / Ultra",
+    screenQualityUltraHelp: "Requests 4K for a strong display and network.",
+    screenQualityCustom: "Custom",
+    screenQualityCustomHelp: "Use the manual values below.",
+    screenQualityManual: "Manual controls",
+    screenQualityResolution: "Resolution cap",
+    screenQualityWidth: "Width",
+    screenQualityHeight: "Height",
+    screenQualityFrameRate: "Frame rate",
+    screenQualityBitrate: "Bitrate",
+    screenQualityOptimizeFor: "Optimize for",
+    screenQualityOptimizeDetail: "Text detail",
+    screenQualityOptimizeMotion: "Motion",
+    screenQualityPrioritizeScreen: "Prioritize screen over camera",
+    screenQualityPrioritizeScreenHelp:
+      "Limits your camera stream while sharing so text stays clearer.",
+    screenQualityActual: "Actual stream",
+    screenQualityWaitingStats: "Waiting for WebRTC stats...",
+    screenQualityPath: "Path",
+    screenQualityDirect: "Direct",
+    screenQualityRelay: "Relay",
+    screenQualityUnknownPath: "Path unknown",
+    screenQualityStart: "Start sharing",
+    screenQualityApply: "Apply quality",
+    screenQualityApplying: "Applying...",
+    screenQualityCancel: "Cancel",
+    screenQuality4kNotice:
+      "4K is a request, not a guarantee. Browsers may cap it based on source, CPU, or network.",
+    screenQualityKbps: "kbps",
+    screenQualityFpsUnit: "fps"
   },
   ja: {
     appName: "Sakura Call",
     homeTitle: "プライベート通話を開始",
-    homeFootnote: "2人専用。英語と日本語のみ。",
+    homeFootnote: "2人専用。対応言語間で字幕を翻訳します。",
     createRoom: "ルームを作成",
     creatingRoom: "ルームを作成中...",
     createRoomFailed: "ルームを作成できませんでした",
@@ -338,6 +453,7 @@ const strings = {
     micControl: "マイク",
     cameraControl: "カメラ",
     shareControl: "共有",
+    qualityControl: "品質",
     settingsControl: "設定",
     leaveControl: "退出",
     captionsControl: "字幕",
@@ -383,12 +499,58 @@ const strings = {
     cameraUnavailable: "カメラを利用できません",
     microphoneUnavailable: "マイクを利用できません",
     openSettings: "設定を開く",
-    closeSettings: "設定を閉じる"
+    closeSettings: "設定を閉じる",
+    openScreenQuality: "画面共有の品質設定を開く",
+    closeScreenQuality: "画面共有の品質設定を閉じる",
+    screenQualityKicker: "画面品質",
+    screenQualityTitle: "画面を共有",
+    screenQualityLiveTitle: "画面品質",
+    screenQualityHelp:
+      "画面を選ぶ前に、文字の見やすさ・動き・帯域を選択します。",
+    screenQualityLiveHelp:
+      "ブラウザが対応している範囲で、現在の画面共有に反映します。",
+    screenQualityPreset: "プリセット",
+    screenQualityDetail: "文字重視",
+    screenQualityDetailHelp: "文字をくっきり表示し、動きの負荷を抑えます。",
+    screenQualityBalanced: "バランス",
+    screenQualityBalancedHelp: "日常的な共有向けの1080p設定です。",
+    screenQualityMotion: "動き重視",
+    screenQualityMotionHelp: "動画やデモ向けにフレームレートを上げます。",
+    screenQualityUltra: "4K / ウルトラ",
+    screenQualityUltraHelp: "高性能な画面とネットワーク向けに4Kを要求します。",
+    screenQualityCustom: "カスタム",
+    screenQualityCustomHelp: "下の手動値を使います。",
+    screenQualityManual: "手動設定",
+    screenQualityResolution: "解像度上限",
+    screenQualityWidth: "幅",
+    screenQualityHeight: "高さ",
+    screenQualityFrameRate: "フレームレート",
+    screenQualityBitrate: "ビットレート",
+    screenQualityOptimizeFor: "最適化",
+    screenQualityOptimizeDetail: "文字の精細さ",
+    screenQualityOptimizeMotion: "動き",
+    screenQualityPrioritizeScreen: "カメラより画面を優先",
+    screenQualityPrioritizeScreenHelp:
+      "共有中は自分のカメラ帯域を抑えて、文字を見やすくします。",
+    screenQualityActual: "実際のストリーム",
+    screenQualityWaitingStats: "WebRTC統計を待っています...",
+    screenQualityPath: "経路",
+    screenQualityDirect: "直接",
+    screenQualityRelay: "リレー",
+    screenQualityUnknownPath: "経路不明",
+    screenQualityStart: "共有を開始",
+    screenQualityApply: "品質を適用",
+    screenQualityApplying: "適用中...",
+    screenQualityCancel: "キャンセル",
+    screenQuality4kNotice:
+      "4Kは要求であり保証ではありません。ブラウザが画面・CPU・ネットワークに応じて制限する場合があります。",
+    screenQualityKbps: "kbps",
+    screenQualityFpsUnit: "fps"
   }
 } as const;
 
 export type TranslationKey = keyof (typeof strings)["en"];
 
 export function t(language: Language, key: TranslationKey): string {
-  return strings[language][key];
+  return strings[uiLanguageFor(language)][key];
 }

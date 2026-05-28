@@ -30,7 +30,7 @@ export type Room = {
 
 const rooms = new Map<string, Room>();
 const roomTtlMs = 4 * 60 * 60 * 1000;
-const participantReconnectTtlMs = 2 * 60 * 1000;
+export const participantReconnectTtlMs = 2 * 60 * 1000;
 const maxFailedAttempts = 5;
 const blockMs = 60 * 1000;
 
@@ -363,6 +363,30 @@ export function markParticipantDisconnected(roomId: string, participantId: strin
   participant.socketId = undefined;
   participant.lastSeenAt = Date.now();
   return { roomEnded: false, participant };
+}
+
+export function expireDisconnectedParticipant(
+  roomId: string,
+  participantId: string
+) {
+  const room = rooms.get(roomId);
+  const participant = room?.participants.get(participantId);
+
+  if (!room || !participant || participant.socketId) {
+    return { expired: false, roomEnded: false, participant };
+  }
+
+  if (Date.now() - participant.lastSeenAt < participantReconnectTtlMs) {
+    return { expired: false, roomEnded: false, participant };
+  }
+
+  if (participant.isHost) {
+    rooms.delete(roomId);
+    return { expired: true, roomEnded: true, participant };
+  }
+
+  room.participants.delete(participantId);
+  return { expired: true, roomEnded: false, participant };
 }
 
 export function updateParticipantLanguage(

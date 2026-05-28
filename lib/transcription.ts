@@ -1,5 +1,6 @@
 import OpenAI, { toFile } from "openai";
 import type { Language } from "./i18n";
+import { languageName } from "./i18n";
 
 const defaultTranscriptionModel = "gpt-4o-transcribe";
 const nonEnglishScriptPattern =
@@ -35,6 +36,14 @@ function transcriptionPrompt(language: Language, strict = false) {
       : "Live two-person conversation. The speaker selected English and will only speak English. Transcribe natural spoken English using English Latin letters. Write short reactions as English words such as aww, oh, ah, huh, hmm.";
   }
 
+  if (language !== "ja") {
+    const name = languageName(language);
+
+    return strict
+      ? `The speaker selected ${name} and will speak ${name}. Transcribe only the spoken ${name}. If the audio is unclear, return the closest ${name} transcription only. Output only the transcript.`
+      : `Live two-person conversation. The speaker selected ${name} and will speak ${name}. Transcribe natural spoken ${name}. Preserve casual phrasing and punctuation. Output only the transcript.`;
+  }
+
   return strict
     ? "話者は日本語を選択しており、日本語だけを話します。自然な日本語として文字起こししてください。韓国語やハングルは出力しないでください。外来語、固有名詞、ブランド名、略語、OK、AI、Wi-Fiなど、日本語会話で自然に使われる英字表記は許可します。音声が不明瞭な場合も、最も近い日本語会話の文字起こしだけを返してください。"
     : "ライブの二人会話です。話者は日本語を選択しており、日本語だけを話します。自然な日本語の発話を文字起こししてください。外来語、固有名詞、ブランド名、略語、OK、AI、Wi-Fiなど、日本語会話で自然に使われる英字表記はそのまま許可します。";
@@ -45,7 +54,11 @@ function hasWrongScript(text: string, language: Language) {
     return nonEnglishScriptPattern.test(text);
   }
 
-  return hangulScriptPattern.test(text);
+  if (language === "ja") {
+    return hangulScriptPattern.test(text);
+  }
+
+  return false;
 }
 
 async function transcribeWithPrompt({

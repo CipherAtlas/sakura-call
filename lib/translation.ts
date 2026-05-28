@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { Language } from "./i18n";
+import { languageName } from "./i18n";
 
 const defaultTranslationModel = "gpt-4o-mini";
 
@@ -18,10 +19,6 @@ function getOpenAIClient() {
   });
 
   return client;
-}
-
-function languageName(language: Language) {
-  return language === "en" ? "English" : "Japanese";
 }
 
 export async function translateText({

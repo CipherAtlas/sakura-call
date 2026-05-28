@@ -3,14 +3,14 @@
 import { Captions, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Language } from "@/lib/i18n";
-import { t } from "@/lib/i18n";
+import { languageLabel, t } from "@/lib/i18n";
 
 export type CaptionEvent = {
   roomId: string;
   speakerId: string;
-  originalLanguage: "en" | "ja";
+  originalLanguage: Language;
   originalText: string;
-  translatedLanguage: "en" | "ja";
+  translatedLanguage: Language;
   translatedText: string;
   isFinal: boolean;
   timestamp: number;
@@ -162,7 +162,7 @@ function appendLiveCaption(
 }
 
 function captionLanguageLabel(language: CaptionEvent["originalLanguage"]) {
-  return language === "en" ? "English" : "日本語";
+  return languageLabel(language);
 }
 
 export function ConversationPanel({

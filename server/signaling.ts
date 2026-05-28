@@ -11,6 +11,7 @@ import { parseCookies } from "./cookies";
 import { isAllowedOrigin } from "./origin";
 import {
   creatorCookieName,
+  expireDisconnectedParticipant,
   findParticipantBySocket,
   getRoom,
   isCreatorSecret,
@@ -18,6 +19,7 @@ import {
   leaveRoom,
   markParticipantDisconnected,
   Participant,
+  participantReconnectTtlMs,
   startSubtitleService,
   stopSubtitleService,
   updateParticipantLanguage
@@ -26,9 +28,9 @@ import {
 type CaptionEvent = {
   roomId: string;
   speakerId: string;
-  originalLanguage: "en" | "ja";
+  originalLanguage: Language;
   originalText: string;
-  translatedLanguage: "en" | "ja";
+  translatedLanguage: Language;
   translatedText: string;
   isFinal: boolean;
   timestamp: number;
@@ -53,6 +55,36 @@ type SocketParticipantSession = {
 };
 
 const socketParticipantSessions = new Map<string, SocketParticipantSession>();
+const disconnectExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function disconnectExpiryKey(roomId: string, participantId: string) {
+  return `${roomId}:${participantId}`;
+}
+
+function clearDisconnectExpiry(roomId: string, participantId: string) {
+  const key = disconnectExpiryKey(roomId, participantId);
+  const timer = disconnectExpiryTimers.get(key);
+
+  if (!timer) {
+    return;
+  }
+
+  clearTimeout(timer);
+  disconnectExpiryTimers.delete(key);
+}
+
+function clearRoomDisconnectExpiries(roomId: string) {
+  const prefix = `${roomId}:`;
+
+  for (const [key, timer] of disconnectExpiryTimers) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+
+    clearTimeout(timer);
+    disconnectExpiryTimers.delete(key);
+  }
+}
 
 function consumeRateLimit(key: string, max: number, windowMs: number) {
   const now = Date.now();
@@ -115,6 +147,38 @@ function emitRoomEnded(io: Server, roomId: string, endedBy: string) {
     endedBy
   });
   void io.in(roomId).socketsLeave(roomId);
+}
+
+function scheduleDisconnectExpiry(
+  io: Server,
+  roomId: string,
+  participantId: string
+) {
+  clearDisconnectExpiry(roomId, participantId);
+
+  const key = disconnectExpiryKey(roomId, participantId);
+  const timer = setTimeout(() => {
+    disconnectExpiryTimers.delete(key);
+    const result = expireDisconnectedParticipant(roomId, participantId);
+
+    if (!result.expired || !result.participant) {
+      return;
+    }
+
+    if (result.roomEnded) {
+      emitRoomEnded(io, roomId, participantId);
+      clearRoomDisconnectExpiries(roomId);
+      return;
+    }
+
+    emitToOtherParticipant(io, roomId, participantId, "peer:left", {
+      participantId
+    });
+    emitRoomStatus(io, roomId);
+  }, participantReconnectTtlMs);
+
+  timer.unref?.();
+  disconnectExpiryTimers.set(key, timer);
 }
 
 function getSocketParticipant(socketId: string) {
@@ -263,6 +327,7 @@ export function createSignalingServer(httpServer: HttpServer) {
       }
 
       socket.join(roomId);
+      clearDisconnectExpiry(roomId, participantId);
       socketParticipantSessions.set(socket.id, {
         roomId,
         participantId
@@ -472,9 +537,11 @@ export function createSignalingServer(httpServer: HttpServer) {
       const participantId = participant.participantId;
       const leaveResult = leaveRoom(roomId, participantId);
       socketParticipantSessions.delete(socket.id);
+      clearDisconnectExpiry(roomId, participantId);
 
       if (leaveResult.roomEnded) {
         emitRoomEnded(io, roomId, participantId);
+        clearRoomDisconnectExpiries(roomId);
         return;
       }
 
@@ -497,15 +564,10 @@ export function createSignalingServer(httpServer: HttpServer) {
         match.participant.participantId
       );
       socketParticipantSessions.delete(socket.id);
-
-      emitToOtherParticipant(
+      scheduleDisconnectExpiry(
         io,
         match.room.roomId,
-        match.participant.participantId,
-        "peer:left",
-        {
-          participantId: match.participant.participantId
-        }
+        match.participant.participantId
       );
       emitRoomStatus(io, match.room.roomId);
     });

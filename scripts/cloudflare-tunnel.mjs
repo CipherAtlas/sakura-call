@@ -3,10 +3,13 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 const mode = process.argv[2] || "setup";
-const env = {
-  ...process.env,
+const fileEnv = {
   ...parseEnvFile(".env"),
   ...parseEnvFile(".env.local")
+};
+const env = {
+  ...fileEnv,
+  ...process.env
 };
 
 const token = env.CLOUDFLARE_API_TOKEN || env.CLOUDFARE_API_TOKEN;
@@ -15,6 +18,8 @@ const zoneId = env.CLOUDFLARE_ZONE_ID;
 const hostname = env.CLOUDFLARE_HOSTNAME;
 const tunnelName = env.CLOUDFLARE_TUNNEL_NAME || "sakura-call";
 const serviceUrl = env.CLOUDFLARE_SERVICE_URL || "http://localhost:3010";
+const tunnelProtocol = env.TUNNEL_TRANSPORT_PROTOCOL || "http2";
+const tunnelEdgeIpVersion = env.TUNNEL_EDGE_IP_VERSION || "4";
 
 if (!token || !accountId || !zoneId || !hostname) {
   throw new Error(
@@ -199,9 +204,28 @@ async function setup() {
 async function run() {
   const tunnel = await ensureTunnel();
   const tunnelToken = await getTunnelToken(tunnel.id);
-  const child = spawn("cloudflared", ["tunnel", "--no-autoupdate", "run", "--token", tunnelToken], {
-    stdio: "inherit"
-  });
+  console.log(
+    `Starting Cloudflare tunnel with protocol=${tunnelProtocol} edge-ip-version=${tunnelEdgeIpVersion}`
+  );
+
+  const child = spawn(
+    "cloudflared",
+    [
+      "tunnel",
+      "--no-autoupdate",
+      "--protocol",
+      tunnelProtocol,
+      "--edge-ip-version",
+      tunnelEdgeIpVersion,
+      "run",
+      "--token",
+      tunnelToken
+    ],
+    {
+      env,
+      stdio: "inherit"
+    }
+  );
 
   child.on("exit", (code, signal) => {
     if (signal) {

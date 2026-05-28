@@ -1,24 +1,20 @@
 "use client";
 
-import { Flower2, Leaf } from "lucide-react";
+import { Flower2, Languages, Leaf } from "lucide-react";
+import { useState } from "react";
 import type { Language } from "@/lib/i18n";
-import { languageLabel } from "@/lib/i18n";
+import {
+  isSupportedLanguage,
+  languageLabel,
+  supportedLanguageOptions
+} from "@/lib/i18n";
 
 export function LanguageGate({
   onSelect
 }: {
   onSelect: (language: Language) => void;
 }) {
-  const languageOptions = [
-    {
-      language: "en",
-      detail: "Use English"
-    },
-    {
-      language: "ja",
-      detail: "日本語で使う"
-    }
-  ] as const;
+  const [selectedLanguage, setSelectedLanguage] = useState<Language>("en");
 
   return (
     <main className="sakura-home garden-scene entry-scene safe-bottom min-h-dvh px-5 py-6">
@@ -41,25 +37,50 @@ export function LanguageGate({
                 <span>言語を選択</span>
               </h1>
               <p className="garden-muted entry-subtitle">
-                English and Japanese only.
+                Pick the language you will speak. Captions can translate it for the other person.
               </p>
 
-              <div className="entry-options" aria-label="Choose language">
-                {languageOptions.map(({ language, detail }) => (
-                  <button
-                    key={language}
-                    type="button"
-                    onClick={() => onSelect(language)}
-                    className="garden-button entry-choice"
+              <form
+                className="entry-options"
+                aria-label="Choose language"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSelect(selectedLanguage);
+                }}
+              >
+                <label className="entry-label" htmlFor="spoken-language">
+                  <span>
+                    <Languages className="h-4 w-4" aria-hidden="true" />
+                    Spoken language
+                  </span>
+                  <select
+                    id="spoken-language"
+                    value={selectedLanguage}
+                    onChange={(event) => {
+                      const nextLanguage = event.target.value;
+
+                      if (isSupportedLanguage(nextLanguage)) {
+                        setSelectedLanguage(nextLanguage);
+                      }
+                    }}
+                    className="garden-select entry-language-select"
                   >
-                    <span className="entry-choice-copy">
-                      <span>{languageLabel(language)}</span>
-                      <small>{detail}</small>
-                    </span>
-                    <Leaf className="h-5 w-5" aria-hidden="true" />
-                  </button>
-                ))}
-              </div>
+                    {supportedLanguageOptions.map(({ code, label }) => (
+                      <option key={code} value={code}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <button type="submit" className="garden-button entry-choice">
+                  <span className="entry-choice-copy">
+                    <span>Continue</span>
+                    <small>{languageLabel(selectedLanguage)}</small>
+                  </span>
+                  <Leaf className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </form>
             </div>
 
             <footer className="sakura-footer entry-footer">

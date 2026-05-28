@@ -5,7 +5,7 @@
 <h1 align="center">Sakura Call</h1>
 
 <p align="center">
-  A private, on-demand, two-person WebRTC calling app for English and Japanese conversations.
+  A private, on-demand, two-person WebRTC calling app with multilingual captions.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@ The app intentionally keeps the product surface small:
 - Hard two-person room limit.
 - Owner-controlled room creation.
 - 4-digit room code join flow.
-- English and Japanese language support.
+- Multilingual caption transcription and translation support.
 - Audio calls, video calls, and screen sharing.
 - Live translated captions with a per-browser privacy acknowledgement.
 - Peer-to-peer WebRTC media first, with TURN fallback for restrictive networks.
@@ -300,7 +300,7 @@ app/room/[roomId]/           Room page
 components/                  Client UI and call experience
 lib/audioCapture.ts          Browser speech segmentation and WAV encoding
 lib/audioEnhancement.ts      Browser microphone filtering and soft noise gate
-lib/i18n.ts                  English and Japanese UI strings
+lib/i18n.ts                  Supported language metadata and UI strings
 lib/roomCode.ts              Browser session storage helper for room codes
 lib/socket.ts                Socket.IO client
 lib/transcription.ts         Server-side OpenAI transcription
@@ -329,7 +329,7 @@ run.sh                       On-demand public runtime script
 
 - This is not a scalable public calling service.
 - It supports exactly two participants.
-- It supports English and Japanese.
+- It supports the configured OpenAI speech-to-text language set for captions.
 - Room and participant state are in memory.
 - There is no database, account system, public room listing, queue, monitoring stack, CI/CD pipeline, or production deployment target.
 - TURN fallback requires a directly reachable TURN server and valid credentials.
@@ -348,6 +348,5 @@ Before a real call, confirm:
 - A third participant is blocked.
 - Audio, video, and screen sharing controls work for the selected browser.
 - The conversation and captions section remains visible during audio, video, and screen-sharing states.
-- English viewers receive English subtitles.
-- Japanese viewers receive Japanese subtitles.
+- Each viewer receives subtitles translated into their selected spoken language.
 - The app, tunnel, and TURN relay stop when `run.sh` exits.

@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Sakura Call",
-  description: "Two-person WebRTC call with live English and Japanese translated subtitles.",
+  description: "Two-person WebRTC call with live translated subtitles.",
   icons: {
     icon: "/icon.png",
     apple: "/icon.png"

@@ -16,6 +16,7 @@ import {
   ScreenShare,
   ScreenShareOff,
   Settings,
+  SlidersHorizontal,
   TowerControl,
   X,
 } from "lucide-react";
@@ -44,10 +45,11 @@ import {
   clearSavedLanguage,
   getSavedDisplayName,
   getSavedLanguage,
+  isSupportedLanguage,
   Language,
-  languageLabel,
   saveDisplayName,
   saveLanguage,
+  supportedLanguageOptions,
   t,
 } from "@/lib/i18n";
 import {
@@ -260,9 +262,90 @@ type SubtitleNoticeKey =
   | "subtitleServiceStoppedNotice"
   | "callHostLeftNotice";
 type LayoutPickerMode = "all" | MediaSurfaceSlot;
+type ScreenSharePresetId =
+  | "detail"
+  | "balanced"
+  | "motion"
+  | "ultra"
+  | "custom";
+type ScreenShareOptimization = "detail" | "motion";
+type ScreenShareQualitySettings = {
+  presetId: ScreenSharePresetId;
+  width: number;
+  height: number;
+  frameRate: number;
+  bitrateKbps: number;
+  optimization: ScreenShareOptimization;
+  prioritizeScreen: boolean;
+};
+type ScreenShareConnectionPath = "direct" | "relay" | "unknown";
+type ScreenShareStatsSnapshot = {
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrateKbps?: number;
+  path: ScreenShareConnectionPath;
+  roundTripMs?: number;
+  limitation?: string;
+};
 
 const captionLogLimit = 60;
 const videoCallingEnabled = true;
+const screenSharePresetIds: ScreenSharePresetId[] = [
+  "detail",
+  "balanced",
+  "motion",
+  "ultra",
+  "custom",
+];
+const screenSharePresetDefaults: Record<
+  Exclude<ScreenSharePresetId, "custom">,
+  ScreenShareQualitySettings
+> = {
+  detail: {
+    presetId: "detail",
+    width: 1920,
+    height: 1080,
+    frameRate: 15,
+    bitrateKbps: 4500,
+    optimization: "detail",
+    prioritizeScreen: true,
+  },
+  balanced: {
+    presetId: "balanced",
+    width: 1920,
+    height: 1080,
+    frameRate: 24,
+    bitrateKbps: 6000,
+    optimization: "detail",
+    prioritizeScreen: true,
+  },
+  motion: {
+    presetId: "motion",
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    bitrateKbps: 8500,
+    optimization: "motion",
+    prioritizeScreen: true,
+  },
+  ultra: {
+    presetId: "ultra",
+    width: 3840,
+    height: 2160,
+    frameRate: 30,
+    bitrateKbps: 18000,
+    optimization: "detail",
+    prioritizeScreen: true,
+  },
+};
+const defaultScreenShareQuality = screenSharePresetDefaults.detail;
+const screenShareResolutionOptions = [
+  { label: "720p", width: 1280, height: 720 },
+  { label: "1080p", width: 1920, height: 1080 },
+  { label: "1440p", width: 2560, height: 1440 },
+  { label: "4K", width: 3840, height: 2160 },
+] as const;
 
 function getSessionParticipantId() {
   const key = "jec.participantId";
@@ -432,6 +515,174 @@ function turnStatusLabel(language: Language, status: TurnStatus | null) {
   }
 }
 
+function clampQualityNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function screenShareConstraints(
+  settings: ScreenShareQualitySettings,
+): MediaTrackConstraints {
+  return {
+    frameRate: {
+      ideal: settings.frameRate,
+      max: settings.frameRate,
+    },
+    height: { ideal: settings.height },
+    width: { ideal: settings.width },
+  };
+}
+
+function tuneSenderEncoding(
+  sender: RTCRtpSender,
+  {
+    degradationPreference,
+    maxBitrateKbps,
+    maxFramerate,
+    scaleResolutionDownBy = 1,
+  }: {
+    degradationPreference?: "balanced" | "maintain-framerate" | "maintain-resolution";
+    maxBitrateKbps?: number;
+    maxFramerate?: number;
+    scaleResolutionDownBy?: number;
+  },
+) {
+  const parameters = sender.getParameters() as RTCRtpSendParameters & {
+    degradationPreference?: "balanced" | "maintain-framerate" | "maintain-resolution";
+  };
+  parameters.encodings =
+    parameters.encodings && parameters.encodings.length > 0
+      ? parameters.encodings
+      : [{}];
+
+  const nextEncoding = {
+    ...parameters.encodings[0],
+    scaleResolutionDownBy,
+  };
+
+  if (maxBitrateKbps) {
+    nextEncoding.maxBitrate = maxBitrateKbps * 1000;
+  } else {
+    delete nextEncoding.maxBitrate;
+  }
+
+  if (maxFramerate) {
+    nextEncoding.maxFramerate = maxFramerate;
+  } else {
+    delete nextEncoding.maxFramerate;
+  }
+
+  parameters.encodings[0] = nextEncoding;
+
+  if (degradationPreference) {
+    parameters.degradationPreference = degradationPreference;
+  }
+
+  return sender.setParameters(parameters).catch(() => undefined);
+}
+
+function findSenderForTrack(
+  peerConnection: RTCPeerConnection | null,
+  track: MediaStreamTrack | null,
+) {
+  if (!peerConnection || !track) {
+    return null;
+  }
+
+  return (
+    peerConnection.getSenders().find((sender) => sender.track?.id === track.id) ??
+    null
+  );
+}
+
+function reportNumber(report: RTCStats | Record<string, unknown>, key: string) {
+  const value = (report as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function reportString(report: RTCStats | Record<string, unknown>, key: string) {
+  const value = (report as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getSelectedConnectionPath(stats: RTCStatsReport): {
+  path: ScreenShareConnectionPath;
+  roundTripMs?: number;
+} {
+  let selectedPairId = "";
+  let selectedPair: RTCStats | null = null;
+
+  stats.forEach((report) => {
+    if (report.type === "transport") {
+      selectedPairId = reportString(report, "selectedCandidatePairId") ?? "";
+    }
+  });
+
+  if (selectedPairId) {
+    selectedPair = stats.get(selectedPairId) ?? null;
+  }
+
+  stats.forEach((report) => {
+    if (
+      !selectedPair &&
+      report.type === "candidate-pair" &&
+      reportString(report, "state") === "succeeded" &&
+      ((report as Record<string, unknown>).selected === true ||
+        (report as Record<string, unknown>).nominated === true)
+    ) {
+      selectedPair = report;
+    }
+  });
+
+  if (!selectedPair) {
+    return { path: "unknown" };
+  }
+
+  const localCandidate = stats.get(reportString(selectedPair, "localCandidateId") ?? "");
+  const remoteCandidate = stats.get(reportString(selectedPair, "remoteCandidateId") ?? "");
+  const localType = localCandidate
+    ? reportString(localCandidate, "candidateType")
+    : undefined;
+  const remoteType = remoteCandidate
+    ? reportString(remoteCandidate, "candidateType")
+    : undefined;
+  const roundTrip = reportNumber(selectedPair, "currentRoundTripTime");
+
+  return {
+    path: localType === "relay" || remoteType === "relay" ? "relay" : "direct",
+    roundTripMs: roundTrip ? Math.round(roundTrip * 1000) : undefined,
+  };
+}
+
+function screenSharePresetLabel(language: Language, presetId: ScreenSharePresetId) {
+  switch (presetId) {
+    case "detail":
+      return t(language, "screenQualityDetail");
+    case "balanced":
+      return t(language, "screenQualityBalanced");
+    case "motion":
+      return t(language, "screenQualityMotion");
+    case "ultra":
+      return t(language, "screenQualityUltra");
+    case "custom":
+      return t(language, "screenQualityCustom");
+  }
+}
+
+function screenSharePresetHelp(language: Language, presetId: ScreenSharePresetId) {
+  switch (presetId) {
+    case "detail":
+      return t(language, "screenQualityDetailHelp");
+    case "balanced":
+      return t(language, "screenQualityBalancedHelp");
+    case "motion":
+      return t(language, "screenQualityMotionHelp");
+    case "ultra":
+      return t(language, "screenQualityUltraHelp");
+    case "custom":
+      return t(language, "screenQualityCustomHelp");
+  }
+}
+
 export function CallRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const socket = useMemo(() => getSocket(), []);
@@ -442,6 +693,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const remoteScreenRef = useRef<HTMLVideoElement>(null);
   const fullscreenShellRef = useRef<HTMLElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localScreenSenderRef = useRef<RTCRtpSender | null>(null);
   const audioCaptureRef = useRef<AudioCaptureController | null>(null);
   const audioEnhancementStopRef = useRef<(() => void) | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -463,6 +715,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const isLocalSpeakingRef = useRef(false);
   const isRemoteSpeakingRef = useRef(false);
   const lastTurnReadyAtRef = useRef(0);
+  const screenShareStatsSampleRef = useRef<{
+    bytesSent: number;
+    timestamp: number;
+  } | null>(null);
 
   const [language, setLanguage] = useState<Language | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -474,6 +730,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [cameraError, setCameraError] = useState("");
   const [isCodeCopied, setIsCodeCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showScreenShareSettings, setShowScreenShareSettings] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [startWithCameraOff, setStartWithCameraOff] = useState(false);
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
@@ -497,6 +754,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [isScreenShareSupported, setIsScreenShareSupported] = useState(false);
   const [isCameraEnabled, setIsCameraEnabled] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenShareQuality, setScreenShareQuality] =
+    useState<ScreenShareQualitySettings>(defaultScreenShareQuality);
+  const [activeScreenShareQuality, setActiveScreenShareQuality] =
+    useState<ScreenShareQualitySettings | null>(null);
+  const [isApplyingScreenQuality, setIsApplyingScreenQuality] = useState(false);
+  const [screenShareStats, setScreenShareStats] =
+    useState<ScreenShareStatsSnapshot | null>(null);
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   const [hasRemoteScreenShare, setHasRemoteScreenShare] = useState(false);
   const [isRoomHost, setIsRoomHost] = useState(false);
@@ -637,7 +901,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, []);
 
   useEffect(() => {
-    if (!showSettings && !showLayoutPicker) {
+    if (!showSettings && !showLayoutPicker && !showScreenShareSettings) {
       return;
     }
 
@@ -645,6 +909,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
       if (event.key === "Escape") {
         setShowSettings(false);
         setShowLayoutPicker(false);
+        setShowScreenShareSettings(false);
+        setScreenShareQuality((current) => activeScreenShareQuality ?? current);
       }
     }
 
@@ -655,7 +921,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.classList.remove("garden-modal-open");
     };
-  }, [showLayoutPicker, showSettings]);
+  }, [
+    activeScreenShareQuality,
+    showLayoutPicker,
+    showScreenShareSettings,
+    showSettings,
+  ]);
 
   useEffect(() => {
     if (!fullscreenSurface) {
@@ -740,6 +1011,96 @@ export function CallRoom({ roomId }: { roomId: string }) {
     smallSurface,
   ]);
 
+  useEffect(() => {
+    if (!isScreenSharing) {
+      screenShareStatsSampleRef.current = null;
+      setScreenShareStats(null);
+      return;
+    }
+
+    let isActive = true;
+
+    async function updateScreenShareStats() {
+      const peerConnection = peerConnectionRef.current;
+      const screenTrack =
+        localScreenStreamRef.current?.getVideoTracks().find(
+          (track) => track.readyState === "live",
+        ) ?? null;
+      const sender =
+        localScreenSenderRef.current ?? findSenderForTrack(peerConnection, screenTrack);
+
+      if (!peerConnection || !sender) {
+        return;
+      }
+
+      localScreenSenderRef.current = sender;
+
+      const senderStats = await sender.getStats().catch(() => null);
+      const connectionStats = await peerConnection.getStats().catch(() => null);
+
+      if (!isActive || !senderStats) {
+        return;
+      }
+
+      let outbound: RTCStats | null = null;
+      senderStats.forEach((report) => {
+        if (
+          report.type === "outbound-rtp" &&
+          (reportString(report, "kind") === "video" ||
+            reportString(report, "mediaType") === "video")
+        ) {
+          outbound = report;
+        }
+      });
+
+      if (!outbound) {
+        return;
+      }
+
+      const bytesSent = reportNumber(outbound, "bytesSent");
+      const timestamp = reportNumber(outbound, "timestamp");
+      const previousSample = screenShareStatsSampleRef.current;
+      const bitrateKbps =
+        bytesSent && timestamp && previousSample && timestamp > previousSample.timestamp
+          ? Math.max(
+              0,
+              Math.round(
+                ((bytesSent - previousSample.bytesSent) * 8) /
+                  (timestamp - previousSample.timestamp),
+              ),
+            )
+          : undefined;
+
+      if (bytesSent && timestamp) {
+        screenShareStatsSampleRef.current = { bytesSent, timestamp };
+      }
+
+      const connectionPath = connectionStats
+        ? getSelectedConnectionPath(connectionStats)
+        : { path: "unknown" as const };
+
+      setScreenShareStats({
+        bitrateKbps,
+        fps: reportNumber(outbound, "framesPerSecond"),
+        height: reportNumber(outbound, "frameHeight"),
+        limitation: reportString(outbound, "qualityLimitationReason"),
+        path: connectionPath.path,
+        roundTripMs: connectionPath.roundTripMs,
+        width: reportNumber(outbound, "frameWidth"),
+      });
+    }
+
+    void updateScreenShareStats();
+    const interval = window.setInterval(() => {
+      void updateScreenShareStats();
+    }, 2000);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [isScreenSharing]);
+
   const playRemoteAudio = useCallback(() => {
     attachStreamToAudio(remoteAudioRef.current, remoteAudioStreamRef.current);
   }, []);
@@ -809,6 +1170,67 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return track;
   }, []);
 
+  const applyCameraBandwidthProfile = useCallback(
+    async (peerConnection: RTCPeerConnection | null, prioritizeScreen: boolean) => {
+      if (!peerConnection) {
+        return;
+      }
+
+      const screenTrack = localScreenStreamRef.current?.getVideoTracks()[0] ?? null;
+      const cameraSenders = peerConnection
+        .getSenders()
+        .filter(
+          (sender) =>
+            sender.track?.kind === "video" && sender.track.id !== screenTrack?.id,
+        );
+
+      await Promise.all(
+        cameraSenders.map((sender) =>
+          tuneSenderEncoding(sender, {
+            degradationPreference: prioritizeScreen
+              ? "maintain-framerate"
+              : "balanced",
+            maxBitrateKbps: prioritizeScreen ? 350 : undefined,
+            maxFramerate: prioritizeScreen ? 12 : undefined,
+            scaleResolutionDownBy: prioritizeScreen ? 2 : 1,
+          }),
+        ),
+      );
+    },
+    [],
+  );
+
+  const applyScreenShareQualityToTrack = useCallback(
+    async (
+      settings: ScreenShareQualitySettings,
+      screenTrack: MediaStreamTrack,
+      sender: RTCRtpSender | null,
+    ) => {
+      screenTrack.contentHint = settings.optimization;
+      await screenTrack.applyConstraints(screenShareConstraints(settings)).catch(() => {
+        return undefined;
+      });
+
+      if (sender) {
+        await tuneSenderEncoding(sender, {
+          degradationPreference:
+            settings.optimization === "detail"
+              ? "maintain-resolution"
+              : "balanced",
+          maxBitrateKbps: settings.bitrateKbps,
+          maxFramerate: settings.frameRate,
+          scaleResolutionDownBy: 1,
+        });
+      }
+
+      await applyCameraBandwidthProfile(
+        peerConnectionRef.current,
+        settings.prioritizeScreen,
+      );
+    },
+    [applyCameraBandwidthProfile],
+  );
+
   const updateRemoteMediaState = useCallback(() => {
     setHasRemoteVideo(
       remoteCameraStreamRef.current
@@ -846,6 +1268,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     if (localScreenStreamRef.current) {
       addStreamTracks(peerConnection, localScreenStreamRef.current);
+      const [screenTrack] = localScreenStreamRef.current.getVideoTracks();
+      const sender = findSenderForTrack(peerConnection, screenTrack ?? null);
+      localScreenSenderRef.current = sender;
+
+      if (screenTrack) {
+        void applyScreenShareQualityToTrack(
+          activeScreenShareQuality ?? screenShareQuality,
+          screenTrack,
+          sender,
+        );
+      }
     }
 
     peerConnection.onicecandidate = (event) => {
@@ -925,7 +1358,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     peerConnectionRef.current = peerConnection;
     return peerConnection;
-  }, [roomId, socket, startRemoteSpeakingMonitor, updateRemoteMediaState]);
+  }, [
+    activeScreenShareQuality,
+    applyScreenShareQualityToTrack,
+    roomId,
+    screenShareQuality,
+    socket,
+    startRemoteSpeakingMonitor,
+    updateRemoteMediaState,
+  ]);
 
   const refreshIceServersForRoom = useCallback(
     async (peerConnection: RTCPeerConnection) => {
@@ -1163,9 +1604,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
     stopLocalMediaTracks(localScreenStreamRef.current);
     localStreamRef.current = null;
     localScreenStreamRef.current = null;
+    localScreenSenderRef.current = null;
+    screenShareStatsSampleRef.current = null;
     setIsMediaReady(false);
     setIsCameraEnabled(false);
     setIsScreenSharing(false);
+    setActiveScreenShareQuality(null);
+    setScreenShareStats(null);
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
     }
@@ -1304,6 +1749,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       setCallState("waiting");
       closePeerConnection(peerConnectionRef.current);
       peerConnectionRef.current = null;
+      localScreenSenderRef.current = null;
       pendingIceCandidatesRef.current = [];
     }
 
@@ -1313,6 +1759,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       resetLocalMediaState();
       closePeerConnection(peerConnectionRef.current);
       peerConnectionRef.current = null;
+      localScreenSenderRef.current = null;
       pendingIceCandidatesRef.current = [];
       setRemoteDisplayName("");
       setCallState("disconnected");
@@ -1832,6 +2279,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
       if (callState !== "idle" && remoteDisplayName) {
         const peerConnection = ensurePeerConnection();
         peerConnection.addTrack(track, stream);
+        await applyCameraBandwidthProfile(
+          peerConnection,
+          Boolean(activeScreenShareQuality?.prioritizeScreen),
+        );
         await createAndSendOffer();
       }
       attachStreamToVideo(localVideoRef.current, new MediaStream([track]));
@@ -1868,7 +2319,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     localScreenStreamRef.current = null;
+    localScreenSenderRef.current = null;
+    screenShareStatsSampleRef.current = null;
     setIsScreenSharing(false);
+    setActiveScreenShareQuality(null);
+    setScreenShareStats(null);
     setDominantSurface((current) =>
       current === "local-screen" ? null : current,
     );
@@ -1884,8 +2339,77 @@ export function CallRoom({ roomId }: { roomId: string }) {
       from: participantIdRef.current,
     });
 
+    await applyCameraBandwidthProfile(peerConnectionRef.current, false);
+
     if (renegotiate && callState !== "idle" && remoteDisplayName) {
       await createAndSendOffer();
+    }
+  }
+
+  function canStartScreenShare() {
+    if (
+      !isScreenShareSupported ||
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getDisplayMedia
+    ) {
+      setCameraError(t(languageRef.current, "screenShareUnavailable"));
+      return false;
+    }
+
+    return true;
+  }
+
+  async function startScreenShare(settings: ScreenShareQualitySettings) {
+    if (!canStartScreenShare()) {
+      return false;
+    }
+
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        audio: false,
+        video: screenShareConstraints(settings),
+      });
+      const [screenTrack] = screenStream.getVideoTracks();
+
+      if (!screenTrack) {
+        return false;
+      }
+
+      localScreenStreamRef.current = screenStream;
+      screenTrack.onended = () => {
+        void stopScreenShare();
+      };
+      attachStreamToVideo(localScreenRef.current, screenStream);
+      await applyScreenShareQualityToTrack(settings, screenTrack, null);
+
+      socket.emit("media:screen-started", {
+        roomId,
+        from: participantIdRef.current,
+        streamId: screenStream.id,
+      });
+
+      if (callState !== "idle" && remoteDisplayName) {
+        const peerConnection = ensurePeerConnection();
+        const sender = peerConnection.addTrack(screenTrack, screenStream);
+        localScreenSenderRef.current = sender;
+        await applyScreenShareQualityToTrack(settings, screenTrack, sender);
+        await createAndSendOffer();
+      }
+
+      setIsScreenSharing(true);
+      setActiveScreenShareQuality(settings);
+      setCameraError("");
+      return true;
+    } catch (mediaError) {
+      if (
+        mediaError instanceof DOMException &&
+        mediaError.name === "NotAllowedError"
+      ) {
+        return false;
+      }
+
+      setCameraError(t(languageRef.current, "screenShareUnavailable"));
+      return false;
     }
   }
 
@@ -1897,59 +2421,58 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
-    if (
-      !isScreenShareSupported ||
-      typeof navigator === "undefined" ||
-      !navigator.mediaDevices?.getDisplayMedia
-    ) {
-      setCameraError(t(languageRef.current, "screenShareUnavailable"));
+    if (canStartScreenShare()) {
+      setScreenShareQuality(activeScreenShareQuality ?? screenShareQuality);
+      setShowScreenShareSettings(true);
+    }
+  }
+
+  function openScreenShareSettings() {
+    setScreenShareQuality(activeScreenShareQuality ?? screenShareQuality);
+    setShowScreenShareSettings(true);
+  }
+
+  function closeScreenShareSettings() {
+    setScreenShareQuality((current) => activeScreenShareQuality ?? current);
+    setShowScreenShareSettings(false);
+  }
+
+  async function handleStartScreenShareFromSettings() {
+    setIsApplyingScreenQuality(true);
+
+    try {
+      const started = await startScreenShare(screenShareQuality);
+
+      if (started) {
+        setShowScreenShareSettings(false);
+      }
+    } finally {
+      setIsApplyingScreenQuality(false);
+    }
+  }
+
+  async function handleApplyScreenShareQuality() {
+    const screenTrack =
+      localScreenStreamRef.current?.getVideoTracks().find(
+        (track) => track.readyState === "live",
+      ) ?? null;
+
+    if (!screenTrack) {
       return;
     }
 
+    setIsApplyingScreenQuality(true);
+
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        audio: false,
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 24, max: 30 },
-        },
-      });
-      const [screenTrack] = screenStream.getVideoTracks();
-
-      if (!screenTrack) {
-        return;
-      }
-
-      localScreenStreamRef.current = screenStream;
-      screenTrack.onended = () => {
-        void stopScreenShare();
-      };
-      attachStreamToVideo(localScreenRef.current, screenStream);
-
-      socket.emit("media:screen-started", {
-        roomId,
-        from: participantIdRef.current,
-        streamId: screenStream.id,
-      });
-
-      if (callState !== "idle" && remoteDisplayName) {
-        const peerConnection = ensurePeerConnection();
-        peerConnection.addTrack(screenTrack, screenStream);
-        await createAndSendOffer();
-      }
-
-      setIsScreenSharing(true);
-      setCameraError("");
-    } catch (mediaError) {
-      if (
-        mediaError instanceof DOMException &&
-        mediaError.name === "NotAllowedError"
-      ) {
-        return;
-      }
-
-      setCameraError(t(languageRef.current, "screenShareUnavailable"));
+      const sender =
+        localScreenSenderRef.current ??
+        findSenderForTrack(peerConnectionRef.current, screenTrack);
+      localScreenSenderRef.current = sender;
+      await applyScreenShareQualityToTrack(screenShareQuality, screenTrack, sender);
+      setActiveScreenShareQuality(screenShareQuality);
+      setShowScreenShareSettings(false);
+    } finally {
+      setIsApplyingScreenQuality(false);
     }
   }
 
@@ -2026,6 +2549,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     resetLocalMediaState();
     closePeerConnection(peerConnectionRef.current);
     peerConnectionRef.current = null;
+    localScreenSenderRef.current = null;
     pendingIceCandidatesRef.current = [];
     socket.emit("room:leave", {
       roomId,
@@ -2284,6 +2808,76 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
+  const selectedScreenResolution = useMemo(() => {
+    const option = screenShareResolutionOptions.find(
+      (item) =>
+        item.width === screenShareQuality.width &&
+        item.height === screenShareQuality.height,
+    );
+
+    return option ? `${option.width}x${option.height}` : "custom";
+  }, [screenShareQuality.height, screenShareQuality.width]);
+
+  function handleSelectScreenSharePreset(presetId: ScreenSharePresetId) {
+    if (presetId === "custom") {
+      setScreenShareQuality((current) => ({ ...current, presetId: "custom" }));
+      return;
+    }
+
+    setScreenShareQuality(screenSharePresetDefaults[presetId]);
+  }
+
+  function updateScreenShareQuality(
+    patch: Partial<Omit<ScreenShareQualitySettings, "presetId">>,
+  ) {
+    setScreenShareQuality((current) => ({
+      ...current,
+      ...patch,
+      presetId: "custom",
+    }));
+  }
+
+  function handleScreenShareNumberChange(
+    field: "width" | "height" | "frameRate" | "bitrateKbps",
+    value: string,
+  ) {
+    const nextValue = Number(value);
+
+    if (!Number.isFinite(nextValue)) {
+      return;
+    }
+
+    const limits: Record<
+      "width" | "height" | "frameRate" | "bitrateKbps",
+      [number, number]
+    > = {
+      bitrateKbps: [500, 30000],
+      frameRate: [5, 60],
+      height: [360, 2160],
+      width: [640, 3840],
+    };
+    const [min, max] = limits[field];
+    updateScreenShareQuality({
+      [field]: clampQualityNumber(nextValue, min, max),
+    });
+  }
+
+  function handleScreenShareResolutionChange(value: string) {
+    const option = screenShareResolutionOptions.find(
+      (item) => `${item.width}x${item.height}` === value,
+    );
+
+    if (!option) {
+      setScreenShareQuality((current) => ({ ...current, presetId: "custom" }));
+      return;
+    }
+
+    updateScreenShareQuality({
+      height: option.height,
+      width: option.width,
+    });
+  }
+
   const layoutPickerTitle =
     !language
       ? ""
@@ -2405,6 +2999,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </span>
             <span className="call-control-label">{t(language, "shareControl")}</span>
           </button>
+          {isScreenSharing ? (
+            <button
+              type="button"
+              aria-label={t(language, "openScreenQuality")}
+              onClick={openScreenShareSettings}
+              className={`call-control-button ${
+                showScreenShareSettings ? "is-active" : ""
+              }`}
+            >
+              <span className="call-control-icon" aria-hidden="true">
+                <SlidersHorizontal className="h-5 w-5" />
+              </span>
+              <span className="call-control-label">
+                {t(language, "qualityControl")}
+              </span>
+            </button>
+          ) : null}
         </>
       ) : null}
 
@@ -3034,6 +3645,304 @@ export function CallRoom({ roomId }: { roomId: string }) {
         </div>
       ) : null}
 
+      {showScreenShareSettings && language ? (
+        <div
+          className="screen-quality-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
+          onClick={closeScreenShareSettings}
+        >
+          <section
+            aria-labelledby="screen-quality-modal-title"
+            aria-modal="true"
+            className="screen-quality-modal w-full max-w-2xl overflow-hidden"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="screen-quality-modal-header">
+              <div className="min-w-0">
+                <p className="garden-kicker flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+                  {t(language, "screenQualityKicker")}
+                </p>
+                <h2
+                  id="screen-quality-modal-title"
+                  className="garden-title mt-1 text-2xl"
+                >
+                  {isScreenSharing
+                    ? t(language, "screenQualityLiveTitle")
+                    : t(language, "screenQualityTitle")}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label={t(language, "closeScreenQuality")}
+                onClick={closeScreenShareSettings}
+                className="garden-icon-button grid h-10 w-10 place-items-center rounded-full"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="screen-quality-content">
+              <p className="screen-quality-help">
+                {isScreenSharing
+                  ? t(language, "screenQualityLiveHelp")
+                  : t(language, "screenQualityHelp")}
+              </p>
+
+              <section className="screen-quality-section">
+                <h3>{t(language, "screenQualityPreset")}</h3>
+                <div className="screen-quality-presets">
+                  {screenSharePresetIds.map((presetId) => (
+                    <button
+                      key={presetId}
+                      type="button"
+                      onClick={() => handleSelectScreenSharePreset(presetId)}
+                      className={`screen-quality-preset ${
+                        screenShareQuality.presetId === presetId
+                          ? "is-selected"
+                          : ""
+                      }`}
+                    >
+                      <span>{screenSharePresetLabel(language, presetId)}</span>
+                      <small>{screenSharePresetHelp(language, presetId)}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="screen-quality-section">
+                <h3>{t(language, "screenQualityManual")}</h3>
+                <div className="screen-quality-fields">
+                  <label className="screen-quality-field">
+                    <span>{t(language, "screenQualityResolution")}</span>
+                    <select
+                      value={selectedScreenResolution}
+                      onChange={(event) =>
+                        handleScreenShareResolutionChange(event.target.value)
+                      }
+                      className="screen-quality-input"
+                    >
+                      {screenShareResolutionOptions.map((option) => (
+                        <option
+                          key={`${option.width}x${option.height}`}
+                          value={`${option.width}x${option.height}`}
+                        >
+                          {option.label} ({option.width}x{option.height})
+                        </option>
+                      ))}
+                      <option value="custom">
+                        {t(language, "screenQualityCustom")}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="screen-quality-field">
+                    <span>{t(language, "screenQualityWidth")}</span>
+                    <input
+                      type="number"
+                      min={640}
+                      max={3840}
+                      step={160}
+                      value={screenShareQuality.width}
+                      onChange={(event) =>
+                        handleScreenShareNumberChange("width", event.target.value)
+                      }
+                      className="screen-quality-input"
+                    />
+                  </label>
+
+                  <label className="screen-quality-field">
+                    <span>{t(language, "screenQualityHeight")}</span>
+                    <input
+                      type="number"
+                      min={360}
+                      max={2160}
+                      step={90}
+                      value={screenShareQuality.height}
+                      onChange={(event) =>
+                        handleScreenShareNumberChange("height", event.target.value)
+                      }
+                      className="screen-quality-input"
+                    />
+                  </label>
+
+                  <label className="screen-quality-field">
+                    <span>{t(language, "screenQualityFrameRate")}</span>
+                    <input
+                      type="number"
+                      min={5}
+                      max={60}
+                      step={1}
+                      value={screenShareQuality.frameRate}
+                      onChange={(event) =>
+                        handleScreenShareNumberChange(
+                          "frameRate",
+                          event.target.value,
+                        )
+                      }
+                      className="screen-quality-input"
+                    />
+                  </label>
+
+                  <label className="screen-quality-field">
+                    <span>{t(language, "screenQualityBitrate")}</span>
+                    <input
+                      type="number"
+                      min={500}
+                      max={30000}
+                      step={500}
+                      value={screenShareQuality.bitrateKbps}
+                      onChange={(event) =>
+                        handleScreenShareNumberChange(
+                          "bitrateKbps",
+                          event.target.value,
+                        )
+                      }
+                      className="screen-quality-input"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="screen-quality-section">
+                <h3>{t(language, "screenQualityOptimizeFor")}</h3>
+                <div className="screen-quality-segment">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateScreenShareQuality({ optimization: "detail" })
+                    }
+                    className={
+                      screenShareQuality.optimization === "detail"
+                        ? "is-selected"
+                        : ""
+                    }
+                  >
+                    {t(language, "screenQualityOptimizeDetail")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateScreenShareQuality({ optimization: "motion" })
+                    }
+                    className={
+                      screenShareQuality.optimization === "motion"
+                        ? "is-selected"
+                        : ""
+                    }
+                  >
+                    {t(language, "screenQualityOptimizeMotion")}
+                  </button>
+                </div>
+
+                <label className="screen-quality-toggle">
+                  <input
+                    type="checkbox"
+                    checked={screenShareQuality.prioritizeScreen}
+                    onChange={(event) =>
+                      updateScreenShareQuality({
+                        prioritizeScreen: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>{t(language, "screenQualityPrioritizeScreen")}</strong>
+                    <small>
+                      {t(language, "screenQualityPrioritizeScreenHelp")}
+                    </small>
+                  </span>
+                </label>
+              </section>
+
+              {isScreenSharing ? (
+                <section className="screen-quality-section screen-quality-stats">
+                  <h3>{t(language, "screenQualityActual")}</h3>
+                  {screenShareStats ? (
+                    <dl>
+                      <div>
+                        <dt>{t(language, "screenQualityResolution")}</dt>
+                        <dd>
+                          {screenShareStats.width && screenShareStats.height
+                            ? `${screenShareStats.width}x${screenShareStats.height}`
+                            : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t(language, "screenQualityFrameRate")}</dt>
+                        <dd>
+                          {screenShareStats.fps
+                            ? `${Math.round(screenShareStats.fps)} ${t(
+                                language,
+                                "screenQualityFpsUnit",
+                              )}`
+                            : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t(language, "screenQualityBitrate")}</dt>
+                        <dd>
+                          {screenShareStats.bitrateKbps
+                            ? `${screenShareStats.bitrateKbps} ${t(
+                                language,
+                                "screenQualityKbps",
+                              )}`
+                            : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t(language, "screenQualityPath")}</dt>
+                        <dd>
+                          {screenShareStats.path === "relay"
+                            ? t(language, "screenQualityRelay")
+                            : screenShareStats.path === "direct"
+                              ? t(language, "screenQualityDirect")
+                              : t(language, "screenQualityUnknownPath")}
+                          {screenShareStats.roundTripMs
+                            ? ` / ${screenShareStats.roundTripMs} ms`
+                            : ""}
+                        </dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p>{t(language, "screenQualityWaitingStats")}</p>
+                  )}
+                </section>
+              ) : (
+                <p className="screen-quality-notice">
+                  {t(language, "screenQuality4kNotice")}
+                </p>
+              )}
+
+              <div className="screen-quality-actions">
+                <button
+                  type="button"
+                  onClick={closeScreenShareSettings}
+                  className="garden-button garden-button-quiet h-12 px-4 text-base"
+                >
+                  {t(language, "screenQualityCancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void (isScreenSharing
+                      ? handleApplyScreenShareQuality()
+                      : handleStartScreenShareFromSettings())
+                  }
+                  disabled={isApplyingScreenQuality}
+                  className="garden-button garden-button-primary h-12 px-4 text-base"
+                >
+                  {isApplyingScreenQuality
+                    ? t(language, "screenQualityApplying")
+                    : isScreenSharing
+                      ? t(language, "screenQualityApply")
+                      : t(language, "screenQualityStart")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {showSettings ? (
         <div
           className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
@@ -3106,22 +4015,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 <p className="garden-text-muted text-sm font-black">
                   {t(language, "changeLanguage")}
                 </p>
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  {(["en", "ja"] as const).map((code) => (
-                    <button
-                      key={code}
-                      type="button"
-                      onClick={() => handleLanguageSelect(code)}
-                      className={`garden-button h-14 border px-4 text-lg ${
-                        language === code
-                          ? "garden-button-primary border-transparent"
-                          : "garden-button-quiet"
-                      }`}
-                    >
-                      {languageLabel(code)}
-                    </button>
+                <select
+                  value={language}
+                  onChange={(event) => {
+                    const nextLanguage = event.target.value;
+
+                    if (isSupportedLanguage(nextLanguage)) {
+                      handleLanguageSelect(nextLanguage);
+                    }
+                  }}
+                  className="garden-select settings-language-select"
+                >
+                  {supportedLanguageOptions.map(({ code, label }) => (
+                    <option key={code} value={code}>
+                      {label}
+                    </option>
                   ))}
-                </div>
+                </select>
               </section>
 
               {turnRelayPanel}

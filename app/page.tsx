@@ -21,10 +21,12 @@ import {
   clearSavedLanguage,
   getSavedDisplayName,
   getSavedLanguage,
+  isSupportedLanguage,
   Language,
   languageLabel,
   saveDisplayName,
   saveLanguage,
+  supportedLanguageOptions,
   t
 } from "@/lib/i18n";
 import { saveRoomCodeForRoom } from "@/lib/roomCode";
@@ -476,13 +478,9 @@ export default function HomePage() {
     0,
     Math.min(100, turnStatus?.progress ?? 0)
   );
-  const createRoomLabel =
-    language === "en" ? "Create room" : t(language, "createRoom");
-  const joinRoomLabel = language === "en" ? "Join room" : t(language, "joinRoom");
-  const homeFootnote =
-    language === "en"
-      ? "Two people only. English and Japanese."
-      : t(language, "homeFootnote");
+  const createRoomLabel = t(language, "createRoom");
+  const joinRoomLabel = t(language, "joinRoom");
+  const homeFootnote = t(language, "homeFootnote");
   const turnRelayPanel = isOwner ? (
     <section className="settings-modal-section turn-relay-panel">
       <div className="flex items-start gap-3">
@@ -724,22 +722,23 @@ export default function HomePage() {
                 <p className="garden-text-muted text-sm font-black">
                   {t(language, "changeLanguage")}
                 </p>
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  {(["en", "ja"] as const).map((code) => (
-                    <button
-                      key={code}
-                      type="button"
-                      onClick={() => handleLanguageSelect(code)}
-                      className={`garden-button h-14 border px-4 text-lg ${
-                        language === code
-                          ? "garden-button-primary border-transparent"
-                          : "garden-button-quiet"
-                      }`}
-                    >
-                      {languageLabel(code)}
-                    </button>
+                <select
+                  value={language}
+                  onChange={(event) => {
+                    const nextLanguage = event.target.value;
+
+                    if (isSupportedLanguage(nextLanguage)) {
+                      handleLanguageSelect(nextLanguage);
+                    }
+                  }}
+                  className="garden-select settings-language-select"
+                >
+                  {supportedLanguageOptions.map(({ code, label }) => (
+                    <option key={code} value={code}>
+                      {label}
+                    </option>
                   ))}
-                </div>
+                </select>
               </section>
 
               <section className="settings-modal-section">
