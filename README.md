@@ -114,13 +114,20 @@ For an actual call with one other person, use:
 The script owns the runtime lifecycle:
 
 1. Clears the local app ports.
-2. Starts a fallback TURN relay unless `TURN_ENABLED=0` is set.
+2. Leaves TURN relay startup off by default.
 3. Builds the app.
 4. Starts the production app on port `3010`.
 5. Starts the Cloudflare Tunnel for the HTTPS app URL.
-6. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, and any TURN relay it started.
+6. Lets the host start the OCI TURN relay from Settings only when fallback is needed.
+7. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, and any TURN relay started by the app or script.
 
-By default, `TURN_MODE=auto` uses the OCI TURN VM when OCI TURN variables are configured; otherwise it starts the local Docker coturn service from `docker-compose.turn.yml`.
+By default, `TURN_ENABLED=0`, so `./run.sh` does not start Docker TURN or OCI TURN during launch. Calls try peer-to-peer first. If OCI TURN variables are configured, the host fallback relay button starts the OCI VM on demand from the room UI.
+
+To deliberately start a relay during launch, opt in for that run:
+
+```bash
+TURN_ENABLED=1 TURN_MODE=local TURN_HOST=localhost ./run.sh
+```
 
 Cloudflare Tunnel exposes the HTTP app only. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
 
@@ -164,7 +171,7 @@ Use `.env.local` for local secrets. Do not commit populated environment files.
 | `TURN_MODE` | `auto`, `local`, or `oci` for `run.sh`. |
 | `TURN_HOST` | Public IP or hostname for local Docker TURN. Defaults to auto-detected public IP. |
 | `TURN_EXTERNAL_IP` | coturn external IP override for Docker mode. |
-| `TURN_ENABLED` | Set to `0` only when you deliberately want no fallback TURN relay from `run.sh`. |
+| `TURN_ENABLED` | `0` by default so `run.sh` does not start TURN at launch. Set to `1` only when you deliberately want launch-time TURN startup. |
 | `OCI_TURN_INSTANCE_ID` | OCI instance OCID for the TURN VM. |
 | `OCI_TURN_SSH_USER` | SSH user for the TURN VM, usually `ubuntu`. |
 | `OCI_TURN_SSH_KEY_FILE` | Local private SSH key path for the TURN VM. Keep it outside the repo. |
@@ -282,7 +289,7 @@ npm run tunnel:run    # Run the Cloudflare Tunnel
 npm run lint          # Run ESLint
 npm run typecheck     # Run TypeScript without emitting files
 npm run build         # Build the Next.js app
-./run.sh              # Start app, Cloudflare Tunnel, and fallback TURN, then clean up on exit
+./run.sh              # Start app and Cloudflare Tunnel, then clean up on exit
 ```
 
 ## Project Structure

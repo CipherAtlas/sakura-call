@@ -18,7 +18,7 @@ APP_URL="${APP_URL:-$(env_file_value APP_URL)}"
 APP_URL="${APP_URL:-}"
 PORTS_TO_CLEAR=(3010 3011 3012 3013)
 TURN_ENABLED="${TURN_ENABLED:-$(env_file_value TURN_ENABLED)}"
-TURN_ENABLED="${TURN_ENABLED:-1}"
+TURN_ENABLED="${TURN_ENABLED:-0}"
 TURN_MODE="${TURN_MODE:-$(env_file_value TURN_MODE)}"
 TURN_MODE="${TURN_MODE:-auto}"
 TURN_COMPOSE_FILE="${TURN_COMPOSE_FILE:-$(env_file_value TURN_COMPOSE_FILE)}"
@@ -288,7 +288,7 @@ configure_oci_turn() {
 
 configure_turn() {
   if [[ "$TURN_ENABLED" == "0" ]]; then
-    echo "TURN relay startup disabled for this run (TURN_ENABLED=0)."
+    echo "TURN relay startup deferred for this run (TURN_ENABLED=0). Use the host relay button if fallback is needed."
     return
   fi
 
