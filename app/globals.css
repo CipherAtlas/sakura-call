@@ -1326,88 +1326,128 @@ video {
 .settings-modal {
   animation: settings-modal-in 260ms cubic-bezier(0.2, 0.88, 0.24, 1.14) both;
   background:
-    radial-gradient(
-      circle at 10% 0%,
-      rgba(255, 190, 214, 0.72),
-      transparent 13rem
-    ),
-    radial-gradient(
-      circle at 100% 16%,
-      rgba(232, 210, 255, 0.68),
-      transparent 12rem
-    ),
-    linear-gradient(
-      150deg,
-      rgba(255, 255, 255, 0.96),
-      rgba(255, 240, 248, 0.92) 58%,
-      rgba(255, 248, 237, 0.94)
-    );
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 0.5rem;
+    linear-gradient(104deg, rgba(255, 255, 255, 0.95) 0 68%, rgba(255, 244, 247, 0.74) 68.2%),
+    linear-gradient(100deg, rgba(255, 255, 255, 0.9), rgba(255, 244, 247, 0.86)),
+    #fff9fa;
+  border: 1px solid rgba(191, 91, 124, 0.28);
+  border-radius: 1rem;
   box-shadow:
-    0 34px 80px rgba(92, 37, 68, 0.26),
-    0 0 0 1px rgba(217, 93, 138, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+    0 34px 80px rgba(126, 57, 82, 0.18),
+    0 10px 24px rgba(126, 57, 82, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
   position: relative;
 }
 
 .settings-modal::before {
   background-image:
-    radial-gradient(
-      ellipse 8px 5px at 20px 20px,
-      rgba(255, 159, 189, 0.22),
-      transparent 70%
-    ),
-    radial-gradient(
-      ellipse 7px 10px at 80px 48px,
-      rgba(181, 139, 234, 0.18),
-      transparent 72%
-    ),
-    radial-gradient(
-      ellipse 12px 5px at 136px 92px,
-      rgba(255, 196, 183, 0.18),
-      transparent 76%
-    );
-  background-size: 160px 120px;
+    radial-gradient(circle at 50% 50%, rgba(239, 129, 164, 0.14) 0 3px, transparent 3.5px),
+    radial-gradient(ellipse 18px 8px at 18px 28px, rgba(231, 103, 147, 0.1), transparent 70%),
+    radial-gradient(ellipse 8px 18px at 72px 56px, rgba(244, 169, 193, 0.12), transparent 70%);
+  background-position:
+    0 0,
+    22px 18px,
+    8px 6px;
+  background-size:
+    190px 160px,
+    190px 160px,
+    190px 160px;
   content: "";
   inset: 0;
-  opacity: 0.8;
+  opacity: 0.72;
   pointer-events: none;
   position: absolute;
 }
 
 .settings-modal-ribbon {
-  background: var(--gradient-primary);
-  box-shadow: 0 8px 24px rgba(185, 107, 232, 0.2);
-  height: 0.32rem;
+  background: linear-gradient(90deg, #f36f9e, #e9437d);
+  box-shadow: 0 8px 24px rgba(217, 73, 122, 0.16);
+  height: 0.22rem;
   inset: 0 0 auto;
   position: absolute;
 }
 
-.settings-modal-close {
+.settings-modal header,
+.settings-modal-content {
   position: relative;
   z-index: 1;
 }
 
+.settings-modal header {
+  padding: 1.45rem 1.45rem 1rem;
+}
+
+.settings-modal .garden-kicker {
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+}
+
+.settings-modal .garden-title {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.settings-modal-close {
+  border-radius: 0.7rem;
+  height: 3rem;
+  position: relative;
+  width: 3rem;
+  z-index: 1;
+}
+
 .settings-modal-content {
+  gap: 1rem;
   max-height: calc(100dvh - 8.5rem);
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 0 1.45rem 1.45rem;
 }
 
 .settings-modal-section {
   background:
     linear-gradient(
       155deg,
-      rgba(255, 255, 255, 0.68),
-      rgba(255, 240, 248, 0.52)
+      rgba(255, 255, 255, 0.72),
+      rgba(255, 248, 250, 0.54)
     ),
-    rgba(255, 250, 253, 0.54);
-  border: 1px solid rgba(217, 93, 138, 0.18);
-  border-radius: 0.5rem;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.66);
-  padding: 0.95rem;
+    rgba(255, 250, 253, 0.58);
+  border: 1px solid rgba(191, 91, 124, 0.2);
+  border-radius: 0.78rem;
+  box-shadow:
+    0 14px 30px rgba(126, 57, 82, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  padding: 1rem;
   position: relative;
+}
+
+.settings-modal .garden-bubble {
+  background: linear-gradient(135deg, #ffd3df 0%, #f7a0bd 100%);
+  box-shadow:
+    0 16px 28px rgba(217, 73, 122, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  color: var(--garden-rose-deep);
+}
+
+.settings-modal .garden-icon-lilac {
+  color: var(--garden-rose);
+}
+
+.settings-modal .garden-button-primary,
+.settings-modal .garden-button-secondary {
+  background: linear-gradient(135deg, #ef6d99 0%, #e9437d 100%);
+  border-radius: 0.55rem;
+  box-shadow:
+    0 18px 32px rgba(217, 73, 122, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  color: #fffdf8;
+}
+
+.settings-modal .garden-button-quiet {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(255, 246, 250, 0.48)),
+    rgba(255, 255, 255, 0.34);
+  border-color: rgba(237, 92, 140, 0.42);
+  border-radius: 0.55rem;
+  box-shadow: 0 12px 24px rgba(160, 72, 111, 0.08);
 }
 
 .layout-modal-backdrop {
@@ -1704,8 +1744,8 @@ video {
 }
 
 .turn-relay-pill {
-  background: var(--gradient-panel-strong);
-  border: 1px solid rgba(217, 93, 138, 0.22);
+  background: rgba(255, 249, 251, 0.74);
+  border: 1px solid rgba(237, 92, 140, 0.3);
   border-radius: 999px;
   color: var(--garden-muted-strong);
   display: inline-flex;
@@ -1717,25 +1757,25 @@ video {
 }
 
 .turn-relay-pill.is-busy {
-  background: var(--gradient-status-partial);
-  color: #7b4a18;
+  background: linear-gradient(135deg, #fff0d8 0%, #ffd7e2 100%);
+  color: #8b4a33;
 }
 
 .turn-relay-pill.is-ready {
-  background: var(--gradient-status-final);
-  color: #674083;
+  background: linear-gradient(135deg, #ffe2ed 0%, #ffc2d8 100%);
+  color: #8f2448;
 }
 
 .turn-relay-progress {
-  background: rgba(217, 93, 138, 0.14);
-  border: 1px solid rgba(217, 93, 138, 0.16);
+  background: rgba(237, 92, 140, 0.12);
+  border: 1px solid rgba(237, 92, 140, 0.18);
   border-radius: 999px;
   height: 0.65rem;
   overflow: hidden;
 }
 
 .turn-relay-progress > span {
-  background: var(--gradient-primary);
+  background: linear-gradient(90deg, #f36f9e, #e9437d);
   border-radius: inherit;
   display: block;
   height: 100%;
@@ -3734,7 +3774,9 @@ body.garden-fullscreen-open {
     transform: none;
   }
 
-  .call-active-layout > .garden-panel:first-child .garden-button {
+  .call-active-layout
+    > .garden-panel:first-child
+    .garden-button:not(.room-code-button) {
     display: none;
   }
 
@@ -3748,6 +3790,27 @@ body.garden-fullscreen-open {
     color: var(--garden-ink);
     height: 2.78rem;
     width: 2.78rem;
+  }
+
+  .call-topbar-actions.has-room-code {
+    flex-wrap: nowrap;
+    max-width: none;
+  }
+
+  .call-topbar-actions .room-code-button {
+    flex: 0 0 auto;
+    height: 2.78rem;
+    min-height: 2.78rem;
+    min-width: 4.3rem;
+    padding-inline: 0.72rem;
+  }
+
+  .call-topbar-actions .room-code-button svg {
+    display: none;
+  }
+
+  .call-topbar-actions .room-code-button span {
+    font-size: 0.88rem;
   }
 
   .active-call-workspace {
@@ -4863,8 +4926,11 @@ body.garden-fullscreen-open {
   display: grid;
   max-width: min(100%, 46rem);
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: clamp(0.72rem, 1.45dvh, 1rem);
+  -webkit-overflow-scrolling: touch;
 }
 
 .call-shell-setup.is-media-ready
@@ -5190,13 +5256,24 @@ body.garden-fullscreen-open {
     max-width: 9.4rem;
   }
 
+  .call-shell-setup.is-media-ready .call-topbar-actions.has-room-code {
+    max-width: none;
+  }
+
   .call-shell-setup .call-topbar-actions .garden-button {
     flex-basis: 100%;
     height: 2.85rem;
     order: 3;
   }
 
-  .call-shell-setup.is-media-ready .call-topbar-actions .garden-button {
+  .call-shell-setup .call-topbar-actions.has-room-code .room-code-button {
+    flex-basis: auto;
+    order: 0;
+  }
+
+  .call-shell-setup.is-media-ready
+    .call-topbar-actions
+    .garden-button:not(.room-code-button) {
     display: none;
   }
 
@@ -5328,7 +5405,7 @@ body.garden-fullscreen-open {
     font-size: 1.05rem;
   }
 
-  .call-shell-live .call-topbar-actions .garden-button {
+  .call-shell-live .call-topbar-actions .garden-button:not(.room-code-button) {
     display: none;
   }
 
@@ -5811,7 +5888,7 @@ body.garden-fullscreen-open {
     .call-active-layout
     > .call-topbar.garden-panel:first-child
     .call-topbar-actions
-    .garden-button {
+    .garden-button:not(.room-code-button) {
     display: none;
   }
 

@@ -1,28 +1,46 @@
-# Sakura Call
+<p align="center">
+  <img src="public/icon.png" alt="Sakura Call icon" width="112" height="112" />
+</p>
 
-Sakura Call is a local-development MVP for a private two-person WebRTC call experience with audio, video, screen sharing, and live translated subtitles between English and Japanese.
+<h1 align="center">Sakura Call</h1>
 
-The app is built for quick testing with another person over HTTPS using Cloudflare Tunnel. It is not production infrastructure yet.
+<p align="center">
+  A private, on-demand, two-person WebRTC calling app for English and Japanese conversations.
+</p>
 
-## What It Does
+<p align="center">
+  Audio, video, screen sharing, and optional live translated captions in one owner-operated room.
+</p>
 
-- Creates private two-person rooms.
-- Restricts room creation to the host owner session.
-- Supports English and Japanese only.
-- Gives the room creator a 4-digit room code.
-- Blocks a third participant from joining.
-- Runs peer-to-peer WebRTC audio, video, and screen sharing between the two browsers.
-- Uses Socket.IO for room state, signaling, reconnects, and subtitle events.
-- Captures the local microphone stream only after that browser accepts the captions privacy notice, segments speech in the browser, sends short WAV chunks to the server, transcribes them, translates them, and sends translated subtitles to the other participant.
-- Shows the speaker a local preview of what the other participant receives.
-- Keeps the live conversation/captions area visible during audio, video, and screen-sharing modes.
-- Keeps the OpenAI API key server-side only.
+## Overview
 
-## Privacy Boundary
+Sakura Call is a self-hosted communication tool for one owner and one guest. It is built for short, private calls: start the app when needed, use the call, and stop everything immediately afterward.
 
-Audio, video, and screen sharing use encrypted WebRTC media transport between the two browsers. TURN fallback relays encrypted WebRTC packets, but can still see connection metadata such as IPs, timing, and traffic volume.
+The app intentionally keeps the product surface small:
 
-Live captions/translations are optional and outside that media-encryption boundary. When captions are enabled, the browser sends short local microphone segments to this app server and OpenAI for transcription and translation. Remote audio is not transcribed from another participant's browser.
+- Hard two-person room limit.
+- Owner-controlled room creation.
+- 4-digit room code join flow.
+- English and Japanese language support.
+- Audio calls, video calls, and screen sharing.
+- Live translated captions with a per-browser privacy acknowledgement.
+- Peer-to-peer WebRTC media first, with TURN fallback for restrictive networks.
+- No invite links, public room directory, user accounts, queues, group calls, or long-running service assumptions.
+
+## Privacy Model
+
+Audio, video, and screen sharing use encrypted WebRTC media transport between the two browsers. When a TURN relay is used, the relay forwards encrypted WebRTC packets, but it can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
+
+Live captions and translations are optional and use a different path. When a browser enables captions, that browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then relays translated subtitle text to the other participant and a preview back to the speaker.
+
+Important boundaries:
+
+- Remote audio is not transcribed from another participant's browser.
+- Each browser must accept the captions privacy notice before sending microphone audio for captions.
+- Room state is stored in memory only and disappears when the server stops.
+- Room codes are not placed in URLs or localStorage.
+- The OpenAI API key stays server-side.
+- `.env`, `.env.local`, build output, dependency folders, logs, and caches are ignored by Git.
 
 ## Tech Stack
 
@@ -31,41 +49,22 @@ Live captions/translations are optional and outside that media-encryption bounda
 - TypeScript
 - Tailwind CSS 4
 - Socket.IO
-- WebRTC media transport
+- WebRTC
 - Web Audio API
 - OpenAI API
-- Cloudflare Tunnel for public HTTPS testing
-
-## Project Structure
-
-```text
-app/                       Next.js pages, layout, global CSS, robots route
-app/room/[roomId]/         Room page
-components/                Client UI and call experience
-lib/audioCapture.ts        Browser speech segmentation and WAV encoding
-lib/audioEnhancement.ts    Browser microphone filtering and soft noise gate
-lib/i18n.ts                English/Japanese UI strings and language helpers
-lib/roomCode.ts            Browser session storage helper for room codes
-lib/socket.ts              Socket.IO client
-lib/transcription.ts       Server-side OpenAI transcription
-lib/translation.ts         Server-side OpenAI translation
-lib/webrtc.ts              WebRTC peer connection helpers
-server/index.ts            Custom HTTP server, Next handler, room API routes
-server/rooms.ts            In-memory room, code, participant, and host state
-server/signaling.ts        Socket.IO signaling, subtitles, and room events
-scripts/cloudflare-tunnel.mjs  Cloudflare Tunnel setup/run helper
-run.sh                     Convenience script for public local testing
-```
+- Cloudflare Tunnel for temporary HTTPS access
+- coturn for fallback TURN relay
 
 ## Requirements
 
-- Node.js 20 or newer is recommended.
+- Node.js 20 or newer
 - npm
-- An OpenAI API key
-- `cloudflared`, only if you want to expose the local app through Cloudflare Tunnel
-- A Cloudflare account and a domain on Cloudflare, only for public HTTPS testing
+- An OpenAI API key for captions and translation
+- `cloudflared` for public HTTPS access
+- Docker for the default local TURN relay, or an OCI TURN VM configured for `TURN_MODE=oci`
+- A Cloudflare account and Cloudflare-managed domain for the public tunnel flow
 
-## Local Setup
+## Quick Start
 
 Install dependencies:
 
@@ -79,17 +78,18 @@ Create a local environment file:
 cp .env.example .env.local
 ```
 
-Fill in at least:
+Fill in at least these values:
 
 ```bash
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=<openai-api-key>
+TRANSCRIPTION_MODEL=gpt-4o-transcribe
 TRANSLATION_MODEL=gpt-4o-mini
 NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
-ROOM_OWNER_TOKEN=choose-a-private-host-passcode
-ROOM_OWNER_SESSION_SECRET=choose-a-long-random-cookie-secret
+ROOM_OWNER_TOKEN=<private-owner-passcode>
+ROOM_OWNER_SESSION_SECRET=<long-random-cookie-secret>
 ```
 
-Start the local app:
+Start the local development server:
 
 ```bash
 npm run dev
@@ -101,402 +101,246 @@ Open:
 http://localhost:3000
 ```
 
-Localhost works for browser microphone testing. iPhone Safari and remote devices need HTTPS, so use the Cloudflare Tunnel flow below for real-device testing.
+Localhost is enough for basic browser microphone and UI testing. iPhone Safari and remote participants need HTTPS, so use the Cloudflare Tunnel flow below for real-device calls.
 
-## Environment Variables
+## On-Demand Public Run
 
-```bash
-OPENAI_API_KEY=
-TRANSLATION_MODEL=gpt-4o-mini
-NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
-NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all
-TURN_URLS=
-TURN_USERNAME=sakura
-TURN_PASSWORD=
-TURN_MODE=auto
-OCI_TURN_INSTANCE_ID=
-OCI_TURN_SSH_USER=ubuntu
-OCI_TURN_SSH_KEY_FILE=
-OCI_TURN_STOP_INSTANCE_ON_EXIT=1
-OCI_USER_OCID=
-OCI_FINGERPRINT=
-OCI_TENANCY_OCID=
-OCI_REGION=
-OCI_PRIVATE_KEY_FILE=
-ROOM_OWNER_TOKEN=
-ROOM_OWNER_SESSION_SECRET=
-CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_ACCOUNT_ID=
-CLOUDFLARE_ZONE_ID=
-CLOUDFLARE_HOSTNAME=call.example.com
-CLOUDFLARE_TUNNEL_NAME=sakura-call
-CLOUDFLARE_SERVICE_URL=http://localhost:3010
-```
-
-Notes:
-
-- `OPENAI_API_KEY` is required for transcription and translation.
-- `TRANSLATION_MODEL` defaults to `gpt-4o-mini` when unset.
-- Transcription defaults to `gpt-4o-transcribe`; override with `TRANSCRIPTION_MODEL`.
-- `NEXT_PUBLIC_STUN_URLS` can be a comma-separated list of STUN URLs.
-- `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=relay` forces TURN-only media for testing. Leave it as `all` for normal fallback behavior.
-- `TURN_URLS`, `TURN_USERNAME`, and `TURN_PASSWORD` are server-only fallback TURN settings. The app only returns TURN ICE config to browsers that have joined the room with a valid participant session.
-- `run.sh` does not start TURN at startup. Calls try peer-to-peer first; the host relay button starts the OCI TURN VM only when fallback is needed.
-- `TURN_MODE=auto` is kept for older manual scripts; the normal `run.sh` path uses on-demand OCI TURN from the room UI.
-- `OCI_TURN_STOP_INSTANCE_ON_EXIT=1` stops the OCI TURN VM when `run.sh` exits, matching the on-demand usage model.
-- `OCI_USER_OCID`, `OCI_FINGERPRINT`, `OCI_TENANCY_OCID`, `OCI_REGION`, and `OCI_PRIVATE_KEY_FILE` are used by `run.sh` to create a temporary OCI CLI config. Lowercase OCI variable names from the Oracle download also work.
-- `ROOM_OWNER_TOKEN` is the private passcode used to unlock host mode in Settings. Room creation is disabled when neither `ROOM_OWNER_TOKEN` nor `CLOUDFLARE_CALL_API_TOKEN` is set.
-- `ROOM_OWNER_SESSION_SECRET` signs the host session cookie. It falls back to `ROOM_OWNER_TOKEN` when unset.
-- Cloudflare variables are only required for `npm run tunnel:setup`, `npm run tunnel:run`, and `./run.sh`.
-- Do not commit `.env` or `.env.local`.
-
-## Recommended On-Demand Run Flow
-
-Use this flow for real calls with one other person:
+For an actual call with one other person, use:
 
 ```bash
 ./run.sh
 ```
 
-The script owns the full runtime lifecycle:
+The script owns the runtime lifecycle:
 
 1. Clears the local app ports.
-2. Builds the app with peer-to-peer STUN as the default path.
-3. Starts the production app on port `3010`.
-4. Starts the Cloudflare Tunnel for the HTTPS app URL.
-5. Leaves TURN off until the host presses the fallback relay button.
-6. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, and any TURN relay started by the app.
+2. Starts a fallback TURN relay unless `TURN_ENABLED=0` is set.
+3. Builds the app.
+4. Starts the production app on port `3010`.
+5. Starts the Cloudflare Tunnel for the HTTPS app URL.
+6. On `Ctrl+C`, process exit, or terminal hangup, stops the app, tunnel, and any TURN relay it started.
 
-The intended usage is private and temporary: start the script, make the call, then stop the script. Do not leave it running as a public service.
+By default, `TURN_MODE=auto` uses the OCI TURN VM when OCI TURN variables are configured; otherwise it starts the local Docker coturn service from `docker-compose.turn.yml`.
 
-## Local TURN Server
-
-Run a local coturn relay with Docker:
-
-```bash
-TURN_USERNAME=sakura TURN_PASSWORD=change-me docker compose -f docker-compose.turn.yml up -d
-```
-
-Then point WebRTC at it:
-
-```bash
-TURN_URLS=turn:localhost:3478?transport=udp,turn:localhost:3478?transport=tcp
-TURN_USERNAME=sakura
-TURN_PASSWORD=change-me
-```
-
-For remote callers, `localhost` is not enough. The TURN server must be reachable by both browsers on a public IP or hostname with UDP/TCP `3478` and the relay port range open. When running coturn on a public host, set `TURN_EXTERNAL_IP` to that host's public IP and use that same IP or hostname in `TURN_URLS`.
-
-`run.sh` does not start TURN automatically. With `OCI_TURN_INSTANCE_ID` set, the host can start the fallback relay from the room UI. The app starts the OCI VM if needed, waits for SSH, starts coturn with a per-run TURN password when no password is configured, and exposes the TURN ICE config only to browsers that have joined the room with a valid participant session.
-
-Cloudflare Tunnel only exposes the HTTP app. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
+Cloudflare Tunnel exposes the HTTP app only. It does not carry TURN relay traffic. TURN must be reachable directly from both browsers on:
 
 - `3478/tcp`
 - `3478/udp`
 - `49160-49200/udp`
 
-That is why the OCI VM has a public IP and network security rules for those TURN ports.
+If the local Docker relay is behind a home router or restrictive NAT, use a directly reachable host or the OCI TURN VM path instead.
 
-## OCI TURN VM Setup
+## Join Flow
 
-The current hosted fallback uses a small Oracle Cloud Always Free eligible VM dedicated to coturn:
+The normal call flow is:
+
+1. Choose a language.
+2. Enter a display name.
+3. Host unlocks host mode in Settings with `ROOM_OWNER_TOKEN`.
+4. Host creates a room.
+5. Host shares the 4-digit room code.
+6. Guest chooses a language, enters a display name, and enters the room code.
+7. Both people allow the needed media permissions.
+8. The room admits at most two participants.
+9. The host starts captions if needed.
+10. Each browser accepts the captions privacy notice before its own microphone audio is sent for transcription.
+
+The meeting UI supports audio calls, video calls, and screen sharing. The conversation and captions section remains visible in every meeting mode.
+
+## Environment Variables
+
+Use `.env.local` for local secrets. Do not commit populated environment files.
+
+| Variable | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Server-side OpenAI API key for transcription and translation. |
+| `TRANSCRIPTION_MODEL` | Transcription model. Defaults to `gpt-4o-transcribe`. |
+| `TRANSLATION_MODEL` | Translation model. Defaults to `gpt-4o-mini`. |
+| `NEXT_PUBLIC_STUN_URLS` | Comma-separated STUN URLs. |
+| `NEXT_PUBLIC_ICE_TRANSPORT_POLICY` | `all` for normal behavior, `relay` for TURN-only testing. |
+| `TURN_URLS` | Comma-separated TURN URLs returned only to authenticated room participants. |
+| `TURN_USERNAME` | TURN username. Defaults to `sakura` where supported. |
+| `TURN_PASSWORD` | TURN password. Leave empty to let scripts generate a per-run secret where supported. |
+| `TURN_MODE` | `auto`, `local`, or `oci` for `run.sh`. |
+| `TURN_HOST` | Public IP or hostname for local Docker TURN. Defaults to auto-detected public IP. |
+| `TURN_EXTERNAL_IP` | coturn external IP override for Docker mode. |
+| `TURN_ENABLED` | Set to `0` only when you deliberately want no fallback TURN relay from `run.sh`. |
+| `OCI_TURN_INSTANCE_ID` | OCI instance OCID for the TURN VM. |
+| `OCI_TURN_SSH_USER` | SSH user for the TURN VM, usually `ubuntu`. |
+| `OCI_TURN_SSH_KEY_FILE` | Local private SSH key path for the TURN VM. Keep it outside the repo. |
+| `OCI_TURN_STOP_INSTANCE_ON_EXIT` | `1` stops the OCI TURN VM on exit. |
+| `OCI_USER_OCID` | OCI API user OCID. Lowercase Oracle-generated names also work. |
+| `OCI_FINGERPRINT` | OCI API key fingerprint. |
+| `OCI_TENANCY_OCID` | OCI tenancy OCID. |
+| `OCI_REGION` | OCI region, for example `ap-mumbai-1`. |
+| `OCI_PRIVATE_KEY_FILE` | Local OCI API private key path. Keep it outside the repo. |
+| `ROOM_OWNER_TOKEN` | Private passcode used to unlock host mode. |
+| `ROOM_OWNER_SESSION_SECRET` | Secret used to sign the host session cookie. |
+| `APP_ALLOWED_ORIGINS` | Optional comma-separated allowed origins for production hardening. |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare token for tunnel setup and run commands. |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID. |
+| `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID. |
+| `CLOUDFLARE_HOSTNAME` | Public hostname, for example `call.example.com`. |
+| `CLOUDFLARE_TUNNEL_NAME` | Named Cloudflare Tunnel. Defaults to `sakura-call`. |
+| `CLOUDFLARE_SERVICE_URL` | Local service URL for tunnel ingress, usually `http://localhost:3010`. |
+
+## Cloudflare Tunnel Setup
+
+Use this when you want a real HTTPS URL for Safari, mobile devices, or a participant outside your network.
+
+1. Add your domain to Cloudflare.
+2. Point your registrar nameservers to the Cloudflare nameservers.
+3. Create a Cloudflare API token that can manage the target zone DNS record and Cloudflare Tunnel configuration.
+4. Add the Cloudflare values to `.env.local`.
+5. Install `cloudflared`.
+
+On macOS:
+
+```bash
+brew install cloudflare/cloudflare/cloudflared
+```
+
+Create or update the tunnel and DNS record:
+
+```bash
+npm run tunnel:setup
+```
+
+Then run the full on-demand stack:
+
+```bash
+./run.sh
+```
+
+The public URL only works while the app, tunnel, and this machine are running.
+
+## TURN Options
+
+### Local Docker TURN
+
+`run.sh` starts the Docker TURN service automatically in default `auto` mode when OCI TURN is not configured.
+
+Manual local TURN start:
+
+```bash
+TURN_USERNAME=sakura TURN_PASSWORD=<turn-password> docker compose -f docker-compose.turn.yml up -d
+```
+
+Manual local TURN environment:
+
+```bash
+TURN_URLS=turn:<public-turn-host>:3478?transport=udp,turn:<public-turn-host>:3478?transport=tcp
+TURN_USERNAME=sakura
+TURN_PASSWORD=<turn-password>
+TURN_EXTERNAL_IP=<public-turn-ip>
+```
+
+For remote callers, `localhost` is not enough. The TURN server must be reachable by both browsers on a public IP or hostname with the TURN ports open.
+
+### OCI TURN VM
+
+The OCI fallback path expects a small Always Free eligible VM dedicated to coturn:
 
 - Shape: `VM.Standard.E2.1.Micro`
 - CPU: `1 OCPU`
 - RAM: `1 GB`
-- Boot volume: about `47 GB`
 - Region: `ap-mumbai-1`
 - OS user: `ubuntu`
 - Service: `coturn`
 
-The VM should live in the `sakura-call-free-only` compartment. Keep all Sakura Call networking and compute resources in that compartment so the budget and quota guardrails apply.
+Keep Sakura Call TURN resources inside the `sakura-call-free-only` compartment so budget alerts and quota guardrails apply. Do not add paid or scalable OCI services unless you intentionally change the operating model.
 
-The VM is expected to have these scripts:
+The VM is expected to have:
 
 ```text
 /opt/sakura-turn/start-turn.sh
 /opt/sakura-turn/stop-turn.sh
 ```
 
-`run.sh` calls those scripts over SSH. The start script receives the current public IP and `TURN_USERNAME`/`TURN_PASSWORD` environment variables, then starts coturn for that run. The stop script stops coturn before the VM is shut down.
+The start script receives the current public IP and `TURN_USERNAME`/`TURN_PASSWORD`, then starts coturn for that run. The stop script stops coturn before the VM shuts down.
 
-Your local `.env` or `.env.local` needs the instance and SSH values:
-
-```bash
-OCI_TURN_INSTANCE_ID=ocid1.instance...
-OCI_TURN_SSH_USER=ubuntu
-OCI_TURN_SSH_KEY_FILE=/Users/you/.ssh/sakura_call_oci_turn
-OCI_TURN_STOP_INSTANCE_ON_EXIT=1
-```
-
-It also needs OCI API credentials so `run.sh` can start and stop the VM:
+Keep OCI private keys and SSH keys outside the repository and owner-readable only:
 
 ```bash
-OCI_USER_OCID=ocid1.user...
-OCI_FINGERPRINT=...
-OCI_TENANCY_OCID=ocid1.tenancy...
-OCI_REGION=ap-mumbai-1
-OCI_PRIVATE_KEY_FILE=/Users/you/.oci/oci_api_key.pem
+chmod 600 /path/to/oci_api_key.pem
+chmod 600 /path/to/sakura_call_oci_turn
 ```
 
-Oracle's generated lowercase names also work:
-
-```bash
-oci_user=ocid1.user...
-oci_fingerprint=...
-oci_tenancy=ocid1.tenancy...
-oci_region=ap-mumbai-1
-oci_key_file=/Users/you/.oci/oci_api_key.pem
-```
-
-Keep the OCI private key outside the repo and set it to owner-only permissions:
-
-```bash
-chmod 600 /Users/you/.oci/oci_api_key.pem
-```
-
-Install the OCI CLI locally before using OCI mode:
+Install the OCI CLI before using OCI mode:
 
 ```bash
 pipx install oci-cli
 ```
 
-`run.sh` writes a temporary OCI CLI config from the env values. It does not require a permanent `~/.oci/config`.
-
-## OCI Guardrails
-
-The OCI TURN resources live in the `sakura-call-free-only` compartment. That compartment has:
-
-- A `$1` monthly budget targeting only the Sakura Call compartment.
-- An actual-spend alert at `$0.01`.
-- A forecast alert at `50%` of the budget.
-- A quota policy that limits the compartment to one `VM.Standard.E2.1.Micro`, 60 GB of block storage, one VCN, no reserved public IPs, no block backups, no load balancers, no instance pools/configurations, and no A1 Flex resources.
-
-Budgets are alerts, not hard spending stops. The quota policy is the hard guardrail for accidentally creating larger resources inside the Sakura Call compartment.
-
-When the VM is stopped, the boot volume remains. That is expected and is covered by the block-storage quota. The public IP is not reserved, so it may change between starts; `run.sh` fetches the current public IP every run and rebuilds the app with the matching TURN URL.
-
 ## Commands
 
 ```bash
 npm run dev           # Start the custom Next.js + Socket.IO dev server
-npm run start:public  # Start the production app on port 3010 for Cloudflare Tunnel
-npm run tunnel:setup  # Create/configure the Cloudflare Tunnel and DNS record
+npm run start:public  # Start the production app on port 3010
+npm run tunnel:setup  # Create or update Cloudflare Tunnel and DNS
 npm run tunnel:run    # Run the Cloudflare Tunnel
 npm run lint          # Run ESLint
 npm run typecheck     # Run TypeScript without emitting files
 npm run build         # Build the Next.js app
-./run.sh              # Start app, tunnel, and TURN, then stop them on exit
+./run.sh              # Start app, Cloudflare Tunnel, and fallback TURN, then clean up on exit
 ```
 
-## How The Call Flow Works
-
-1. A user chooses English or Japanese and enters a display name.
-2. Guests go straight to 4-digit room code entry.
-3. The host unlocks host mode in Settings with `ROOM_OWNER_TOKEN`.
-4. The host can choose Create Room or Join Room.
-5. The host calls `POST /api/rooms` with an owner session cookie.
-6. The server creates a 6-character room ID, 4-digit room code, and host-only creator cookie.
-7. The creator shares the 4-digit room code.
-8. The guest enters the 4-digit room code.
-9. Both users grant the needed media permissions and are added to the call.
-10. Socket.IO joins both participants into the room and exchanges WebRTC offer/answer/ICE signaling.
-11. WebRTC sends audio, video, and screen sharing peer-to-peer where the network allows it.
-12. The host starts the subtitle service.
-13. Each browser shows a captions privacy notice before it sends any local microphone audio for captions.
-14. After that browser accepts, it captures its own microphone audio, segments speech, and emits audio chunks to the server.
-15. The server transcribes the speaker's audio, renders captions in each viewer's selected language, and sends a preview caption back to the speaker.
-
-Remote audio is not transcribed. Each browser only submits its own local microphone audio.
-
-If the host leaves, the room ends and the remaining participant is removed from the call.
-
-## Meeting UI Scope
-
-The intended meeting UI supports three modes: audio call, video call, and screen sharing. Keep the private two-person scope, preserve the sakura/garden aesthetic, and ensure the live conversation/captions section remains visible in every mode.
-
-## Security And Privacy Notes
-
-- The OpenAI API key is only used by server-side modules.
-- Audio, video, and screen sharing use encrypted WebRTC media transport between browsers.
-- Captions/translations are optional and are not end-to-end encrypted because local microphone segments are processed by this server and OpenAI.
-- Each browser must accept the captions privacy notice before it sends local microphone audio for captions.
-- Room state is in memory only.
-- Room codes are never placed in URLs or localStorage.
-- Room creation requires an HTTP-only owner session cookie.
-- The room creator is identified by an HTTP-only cookie.
-- Rooms expire after 4 hours.
-- Owner login and room creation attempts are rate-limited.
-- Invalid room-code attempts are rate-limited.
-- Audio segment payloads are size-limited.
-- Socket join, subtitle start, and audio events are rate-limited.
-- The app advertises `Disallow: /` in `robots.txt` because it is private and on-demand. This only affects polite crawlers; scanners and abuse traffic can ignore it.
-- If the Cloudflare hostname is left reachable for more than a short call, add Cloudflare WAF or rate-limit rules for `/api/ice-servers`, `/api/turn/status`, `/api/owner`, and `/socket.io/*`.
-- `.env`, `.env.local`, build output, dependency folders, logs, and caches are ignored by Git.
-
-## Cloudflare Domain And Tunnel Setup
-
-Use this when you want a real HTTPS URL such as `https://call.example.com` for testing on iPhone Safari or with another person outside your network.
-
-### 1. Add Your Domain To Cloudflare
-
-1. Create or sign in to a Cloudflare account.
-2. In Cloudflare, choose **Add a domain**.
-3. Enter your domain, for example `example.com`.
-4. Choose a plan.
-5. Cloudflare will scan existing DNS records. Review and continue.
-6. Cloudflare will show two assigned nameservers.
-
-### 2. Change Nameservers At Your Domain Provider
-
-1. Sign in to the company where you bought the domain, such as Namecheap, GoDaddy, Squarespace, Porkbun, or Google Domains/Squarespace Domains.
-2. Open the domain's DNS or nameserver settings.
-3. Choose custom nameservers.
-4. Replace the existing nameservers with the two Cloudflare nameservers shown for your domain.
-5. Save the change.
-6. Return to Cloudflare and wait for the domain to become active.
-
-Nameserver propagation can take minutes or hours depending on the registrar.
-
-### 3. Create A Cloudflare API Token
-
-Create a Cloudflare API token with permissions that can manage the zone DNS record and Cloudflare Tunnel configuration for your account.
-
-The script needs:
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_ZONE_ID`
-- `CLOUDFLARE_HOSTNAME`
-
-You can find the account ID and zone ID in the Cloudflare dashboard. The hostname should be the full subdomain you want to use, for example:
-
-```bash
-CLOUDFLARE_HOSTNAME=call.example.com
-```
-
-### 4. Configure `.env.local`
-
-```bash
-OPENAI_API_KEY=sk-...
-TRANSLATION_MODEL=gpt-4o-mini
-NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
-CLOUDFLARE_API_TOKEN=...
-CLOUDFLARE_ACCOUNT_ID=...
-CLOUDFLARE_ZONE_ID=...
-CLOUDFLARE_HOSTNAME=call.example.com
-CLOUDFLARE_TUNNEL_NAME=sakura-call
-CLOUDFLARE_SERVICE_URL=http://localhost:3010
-```
-
-### 5. Install `cloudflared`
-
-On macOS with Homebrew:
-
-```bash
-brew install cloudflare/cloudflare/cloudflared
-```
-
-Other installation methods are available from Cloudflare's `cloudflared` documentation.
-
-### 6. Create Or Update The Tunnel And DNS Record
-
-Run this once, and rerun it whenever you change the hostname, account, zone, tunnel name, or service URL:
-
-```bash
-npm run tunnel:setup
-```
-
-The script:
-
-- Verifies the Cloudflare token.
-- Finds or creates the named tunnel.
-- Configures tunnel ingress for `CLOUDFLARE_HOSTNAME`.
-- Replaces any existing DNS record for that hostname with a proxied CNAME to the tunnel.
-- Prints the zone status, nameservers, hostname, service URL, tunnel name, tunnel ID, and DNS record.
-
-### 7. Run The Public Local Site
-
-Terminal 1:
-
-```bash
-npm run build
-npm run start:public
-```
-
-Terminal 2:
-
-```bash
-npm run tunnel:run
-```
-
-Then open your configured hostname, for example:
+## Project Structure
 
 ```text
-https://call.example.com
+app/                         Next.js pages, layout, robots route, global CSS
+app/room/[roomId]/           Room page
+components/                  Client UI and call experience
+lib/audioCapture.ts          Browser speech segmentation and WAV encoding
+lib/audioEnhancement.ts      Browser microphone filtering and soft noise gate
+lib/i18n.ts                  English and Japanese UI strings
+lib/roomCode.ts              Browser session storage helper for room codes
+lib/socket.ts                Socket.IO client
+lib/transcription.ts         Server-side OpenAI transcription
+lib/translation.ts           Server-side OpenAI translation
+lib/webrtc.ts                WebRTC peer connection helpers
+server/index.ts              Custom HTTP server, Next handler, and API routes
+server/rooms.ts              In-memory room, code, participant, and host state
+server/signaling.ts          Socket.IO signaling, subtitles, and room events
+server/turn.ts               On-demand OCI TURN relay control
+scripts/cloudflare-tunnel.mjs Cloudflare Tunnel setup and run helper
+docker-compose.turn.yml      Local coturn fallback relay
+run.sh                       On-demand public runtime script
 ```
 
-The public URL only works while the local app, the tunnel, and your computer are running.
+## Security Notes
 
-You can also use the convenience script:
-
-```bash
-./run.sh
-```
-
-`run.sh` builds the app, starts the production server on port `3010`, starts the tunnel, and stops them when you press `Ctrl+C`. TURN stays off until the host starts the fallback relay from the room UI; if the app started the relay, it stops it on exit.
-
-## Testing With Another Person
-
-1. Start the app and tunnel.
-2. Open your Cloudflare hostname.
-3. Choose `English` or `日本語`.
-4. Enter your name.
-5. Create a room.
-6. Send the other person the 4-digit room code.
-7. The other person opens the site, chooses their language, enters their name, and enters the code.
-8. Both people allow the needed media permissions and join.
-9. The host starts the subtitle service.
-10. Each browser accepts the captions privacy notice if that person wants their speech transcribed and translated.
-11. Speak naturally. The main subtitle area shows the other person's translated speech, and the preview subtitle area shows what your speech looks like after translation.
-
-If the host leaves, the other participant sees a `Call host has left` notice before returning to the home screen.
-
-If the WebRTC media connection fails on a restrictive network, use the host fallback relay button. The app uses STUN by default and falls back to TURN only after a joined room participant receives authenticated ICE config.
+- Keep populated `.env` files out of Git.
+- Keep OpenAI, Cloudflare, OCI, TURN, and SSH credentials outside committed files.
+- Use `ROOM_OWNER_TOKEN` as a private owner passcode.
+- Use a long random `ROOM_OWNER_SESSION_SECRET`.
+- Keep `robots.txt` disallowing crawling because the app is private and on-demand.
+- If the Cloudflare hostname is reachable for longer than a short call, add Cloudflare WAF or rate-limit rules for `/api/ice-servers`, `/api/turn/status`, `/api/owner`, and `/socket.io/*`.
+- Captions and translations are not end-to-end encrypted because microphone chunks are processed by this server and OpenAI.
 
 ## Limitations
 
-- This is an MVP and not production deployment infrastructure.
-- Room and participant state is in memory, so all rooms disappear when the server restarts.
-- It supports only two participants.
-- It supports only English and Japanese.
-- TURN fallback requires a reachable TURN server and valid credentials.
-- Restrictive NATs and firewalls may prevent peer-to-peer media when TURN is not configured.
-- There is no database, user account system, monitoring, CI/CD pipeline, or production deployment target.
-- Subtitle latency favors natural translation quality over immediacy and is expected to be a few seconds.
-
-## Cost Notes
-
-Costs depend on current model pricing, speech volume, silence, retry behavior, and call length.
-
-This MVP uses:
-
-- `gpt-4o-transcribe` by default for transcription
-- `gpt-4o-mini` by default for translation
-
-Plan for API usage before hosting this for real users.
+- This is not a scalable public calling service.
+- It supports exactly two participants.
+- It supports English and Japanese.
+- Room and participant state are in memory.
+- There is no database, account system, public room listing, queue, monitoring stack, CI/CD pipeline, or production deployment target.
+- TURN fallback requires a directly reachable TURN server and valid credentials.
+- Subtitle latency favors natural translation quality over immediacy and can take a few seconds.
 
 ## Verification Checklist
 
-- Select English or Japanese.
-- Enter a display name.
-- Create a room.
-- Copy the 4-digit code.
-- Join from a second browser or device.
-- Confirm a third participant is blocked.
-- Confirm microphone and camera permission flows are clear, localized, and tied to the selected meeting mode.
-- Confirm screen sharing can be started and stopped where the browser supports it.
-- Confirm the conversation/captions section remains visible during audio, video, and screen-sharing states.
-- Confirm English viewers receive English subtitles.
-- Confirm Japanese viewers receive Japanese subtitles.
-- Confirm `npm run lint`, `npm run typecheck`, and `npm run build` pass.
+Before a real call, confirm:
+
+- `npm run lint` passes.
+- `npm run typecheck` passes.
+- `npm run build` passes.
+- The host can unlock host mode.
+- The host can create a room and copy the 4-digit code.
+- The guest can join with the language, name, and room code flow.
+- A third participant is blocked.
+- Audio, video, and screen sharing controls work for the selected browser.
+- The conversation and captions section remains visible during audio, video, and screen-sharing states.
+- English viewers receive English subtitles.
+- Japanese viewers receive Japanese subtitles.
+- The app, tunnel, and TURN relay stop when `run.sh` exits.

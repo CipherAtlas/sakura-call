@@ -3,14 +3,33 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+env_file_value() {
+  local key="$1"
+  local file
+
+  for file in .env.local .env; do
+    if [[ -f "$file" ]]; then
+      awk -F= -v key="$key" '$1 == key { print $2; exit }' "$file" | tr -d "\"'"
+    fi
+  done | awk 'NF { print; exit }'
+}
+
+APP_URL="${APP_URL:-$(env_file_value APP_URL)}"
 APP_URL="${APP_URL:-}"
 PORTS_TO_CLEAR=(3010 3011 3012 3013)
-TURN_ENABLED="${TURN_ENABLED:-0}"
+TURN_ENABLED="${TURN_ENABLED:-$(env_file_value TURN_ENABLED)}"
+TURN_ENABLED="${TURN_ENABLED:-1}"
+TURN_MODE="${TURN_MODE:-$(env_file_value TURN_MODE)}"
 TURN_MODE="${TURN_MODE:-auto}"
+TURN_COMPOSE_FILE="${TURN_COMPOSE_FILE:-$(env_file_value TURN_COMPOSE_FILE)}"
 TURN_COMPOSE_FILE="${TURN_COMPOSE_FILE:-docker-compose.turn.yml}"
+TURN_HOST="${TURN_HOST:-$(env_file_value TURN_HOST)}"
 TURN_HOST="${TURN_HOST:-auto}"
+OCI_TURN_STOP_INSTANCE_ON_EXIT="${OCI_TURN_STOP_INSTANCE_ON_EXIT:-$(env_file_value OCI_TURN_STOP_INSTANCE_ON_EXIT)}"
 OCI_TURN_STOP_INSTANCE_ON_EXIT="${OCI_TURN_STOP_INSTANCE_ON_EXIT:-1}"
+export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING="${OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING:-$(env_file_value OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING)}"
 export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING="${OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING:-True}"
+export PYTHONWARNINGS="${PYTHONWARNINGS:-$(env_file_value PYTHONWARNINGS)}"
 export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore::FutureWarning}"
 app_pid=""
 tunnel_pid=""
@@ -93,17 +112,6 @@ stop_port_processes() {
 
   echo "Force stopping process(es) still on port $port: $pids"
   kill -9 $pids 2>/dev/null || true
-}
-
-env_file_value() {
-  local key="$1"
-  local file
-
-  for file in .env.local .env; do
-    if [[ -f "$file" ]]; then
-      awk -F= -v key="$key" '$1 == key { print $2; exit }' "$file" | tr -d "\"'"
-    fi
-  done | awk 'NF { print; exit }'
 }
 
 env_file_value_any() {
@@ -280,6 +288,7 @@ configure_oci_turn() {
 
 configure_turn() {
   if [[ "$TURN_ENABLED" == "0" ]]; then
+    echo "TURN relay startup disabled for this run (TURN_ENABLED=0)."
     return
   fi
 
@@ -365,10 +374,7 @@ for port in "${PORTS_TO_CLEAR[@]}"; do
   stop_port_processes "$port"
 done
 
-if [[ "$TURN_ENABLED" != "0" ]]; then
-  echo "TURN_ENABLED is ignored; TURN relay startup is on-demand only."
-fi
-echo "TURN relay startup is deferred. Use the host relay button if fallback is needed."
+configure_turn
 
 echo "Building production app..."
 npm run build

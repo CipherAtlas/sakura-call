@@ -2077,7 +2077,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const isCameraOnForControls = isMediaReady
     ? isCameraEnabled
     : !startWithCameraOff;
-  const hostRoomCode = roomInfo?.isCreator ? roomInfo.roomCode : undefined;
+  const hostRoomCode =
+    roomInfo?.roomCode && (roomInfo.isCreator || isRoomHost)
+      ? roomInfo.roomCode
+      : undefined;
   const canManageTurnRelay = Boolean(roomInfo?.isCreator || isRoomHost);
   const turnRelayBusy = isTurnBusy(turnStatus?.phase);
   const turnRelayReady = turnStatus?.phase === "ready";
@@ -2609,7 +2612,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </div>
             <div
               className={`call-topbar-actions flex min-w-0 shrink-0 items-center gap-2 ${
-                hostRoomCode ? "max-sm:w-full" : ""
+                hostRoomCode ? "has-room-code" : ""
               }`}
             >
               {hostRoomCode ? (
@@ -2626,7 +2629,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                       : t(language, "copyRoomCode")
                   }
                   onClick={handleCopyCode}
-                  className="garden-button garden-button-quiet h-12 min-w-0 flex-1 gap-2 px-4 text-sm sm:flex-none sm:text-base"
+                  className="garden-button garden-button-quiet room-code-button h-12 min-w-0 flex-1 gap-2 px-4 text-sm sm:flex-none sm:text-base"
                 >
                   <Copy className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span className="truncate whitespace-nowrap font-black">
@@ -3071,6 +3074,34 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </header>
 
             <div className="settings-modal-content grid gap-4 px-5 pb-5">
+              {hostRoomCode ? (
+                <section className="settings-modal-section settings-room-code-section">
+                  <div className="flex items-start gap-3">
+                    <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
+                      <Copy className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="garden-text-muted text-sm font-black">
+                        {t(language, "roomCode")}
+                      </p>
+                      <button
+                        type="button"
+                        aria-label={
+                          isCodeCopied
+                            ? t(language, "copied")
+                            : t(language, "copyRoomCode")
+                        }
+                        onClick={handleCopyCode}
+                        className="garden-button garden-button-quiet settings-room-code-button mt-3 h-14 w-full gap-2 px-4 text-2xl"
+                      >
+                        <Copy className="h-5 w-5 shrink-0" aria-hidden="true" />
+                        <span className="font-black">{hostRoomCode}</span>
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
               <section className="settings-modal-section">
                 <p className="garden-text-muted text-sm font-black">
                   {t(language, "changeLanguage")}
