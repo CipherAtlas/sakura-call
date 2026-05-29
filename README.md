@@ -31,7 +31,7 @@ The app intentionally keeps the product surface small:
 
 Audio, video, and screen sharing use encrypted WebRTC media transport between participating browsers. Group calls use a peer-to-peer mesh rather than server mixing. When a TURN relay is used, the relay forwards encrypted WebRTC packets, but it can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
 
-Live captions and translations are optional and use a different path. When a browser enables captions, that browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then relays translated subtitle text to the other participant and a preview back to the speaker.
+Live captions and translations are optional and use a different path. When a browser enables captions, that browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then relays translated subtitle text to the other participants and a preview back to the speaker. In group calls, each caption segment is translated only for the selected languages of connected recipients, and one translation is reused for participants who share the same target language.
 
 Important boundaries:
 

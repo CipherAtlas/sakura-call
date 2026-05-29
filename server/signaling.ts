@@ -650,6 +650,8 @@ export function createSignalingServer(httpServer: HttpServer) {
 
         socket.emit("caption:preview", previewCaption);
 
+        const translatedTextByLanguage = new Map<Language, string>();
+
         for (const recipient of room.participants.values()) {
           if (recipient.participantId === participant.participantId) {
             continue;
@@ -659,11 +661,16 @@ export function createSignalingServer(httpServer: HttpServer) {
             continue;
           }
 
-          const translatedText = await captionTextForLanguage({
-            originalText,
-            originalLanguage: participant.spokenLanguage,
-            targetLanguage: recipient.spokenLanguage
-          });
+          let translatedText = translatedTextByLanguage.get(recipient.spokenLanguage);
+
+          if (translatedText === undefined) {
+            translatedText = await captionTextForLanguage({
+              originalText,
+              originalLanguage: participant.spokenLanguage,
+              targetLanguage: recipient.spokenLanguage
+            });
+            translatedTextByLanguage.set(recipient.spokenLanguage, translatedText);
+          }
 
           if (!translatedText) {
             continue;
