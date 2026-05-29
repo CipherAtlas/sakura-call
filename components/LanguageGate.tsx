@@ -6,7 +6,8 @@ import type { Language } from "@/lib/i18n";
 import {
   isSupportedLanguage,
   languageLabel,
-  supportedLanguageOptions
+  supportedLanguageOptions,
+  t
 } from "@/lib/i18n";
 
 export function LanguageGate({
@@ -24,7 +25,7 @@ export function LanguageGate({
             <header className="entry-header">
               <div className="sakura-brand entry-brand">
                 <Flower2 className="h-7 w-7" aria-hidden="true" />
-                <span>Sakura Call</span>
+                <span>{t(selectedLanguage, "appName")}</span>
               </div>
             </header>
 
@@ -33,16 +34,16 @@ export function LanguageGate({
                 <Flower2 className="h-10 w-10" />
               </div>
               <h1 className="garden-title entry-title">
-                <span>Choose language</span>
-                <span>言語を選択</span>
+                <span>{t(selectedLanguage, "chooseLanguageTitle")}</span>
+                <span>{t(selectedLanguage, "chooseLanguageTitleSecondary")}</span>
               </h1>
               <p className="garden-muted entry-subtitle">
-                Pick the language you will speak. Captions can translate it for others.
+                {t(selectedLanguage, "chooseLanguageHelp")}
               </p>
 
               <form
                 className="entry-options"
-                aria-label="Choose language"
+                aria-label={t(selectedLanguage, "chooseLanguageTitle")}
                 onSubmit={(event) => {
                   event.preventDefault();
                   onSelect(selectedLanguage);
@@ -51,7 +52,7 @@ export function LanguageGate({
                 <label className="entry-label" htmlFor="spoken-language">
                   <span>
                     <Languages className="h-4 w-4" aria-hidden="true" />
-                    Spoken language
+                    {t(selectedLanguage, "spokenLanguage")}
                   </span>
                   <select
                     id="spoken-language"
@@ -75,7 +76,7 @@ export function LanguageGate({
 
                 <button type="submit" className="garden-button entry-choice">
                   <span className="entry-choice-copy">
-                    <span>Continue</span>
+                    <span>{t(selectedLanguage, "continue")}</span>
                     <small>{languageLabel(selectedLanguage)}</small>
                   </span>
                   <Leaf className="h-5 w-5" aria-hidden="true" />
@@ -87,7 +88,7 @@ export function LanguageGate({
               <span aria-hidden="true" />
               <Flower2 className="h-4 w-4" aria-hidden="true" />
               <span aria-hidden="true" />
-              <p>Private room calls</p>
+              <p>{t(selectedLanguage, "privateRoomCalls")}</p>
             </footer>
           </div>
 

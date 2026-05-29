@@ -36,7 +36,7 @@ export function UsernameGate({
             <header className="entry-header">
               <div className="sakura-brand entry-brand">
                 <Flower2 className="h-7 w-7" aria-hidden="true" />
-                <span>Sakura Call</span>
+                <span>{t(language, "appName")}</span>
               </div>
               <button
                 type="button"
@@ -93,7 +93,7 @@ export function UsernameGate({
               <span aria-hidden="true" />
               <Flower2 className="h-4 w-4" aria-hidden="true" />
               <span aria-hidden="true" />
-              <p>Private room calls</p>
+              <p>{t(language, "privateRoomCalls")}</p>
             </footer>
           </div>
 
