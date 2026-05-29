@@ -36,6 +36,7 @@ import { UsernameGate } from "@/components/UsernameGate";
 import { VideoGrid } from "@/components/VideoGrid";
 import type {
   MediaLayoutMode,
+  MediaSurfacePlacement,
   MediaSurface,
   MediaSurfaceId,
 } from "@/components/VideoGrid";
@@ -743,6 +744,97 @@ function screenSurfaceId(participantId: string) {
   return `screen:${participantId}`;
 }
 
+type SurfacePickerTarget = {
+  scope: "call" | "fullscreen";
+  slot: MediaSurfacePlacement;
+  surfaceId: MediaSurfaceId;
+};
+
+function orderMediaSurfaces(
+  surfaces: MediaSurface[],
+  surfaceOrder: MediaSurfaceId[],
+) {
+  const surfacePosition = new Map(
+    surfaceOrder.map((surfaceId, index) => [surfaceId, index]),
+  );
+
+  return surfaces
+    .map((surface, index) => ({
+      index,
+      position: surfacePosition.get(surface.id) ?? Number.MAX_SAFE_INTEGER,
+      surface,
+    }))
+    .sort((left, right) => left.position - right.position || left.index - right.index)
+    .map(({ surface }) => surface);
+}
+
+function swapSurfaceOrder(
+  currentOrder: MediaSurfaceId[],
+  surfaces: MediaSurface[],
+  targetSurfaceId: MediaSurfaceId,
+  selectedSurfaceId: MediaSurfaceId,
+) {
+  const surfaceIds = surfaces.map((surface) => surface.id);
+  const nextOrder = [
+    ...currentOrder.filter((surfaceId) => surfaceIds.includes(surfaceId)),
+    ...surfaceIds.filter((surfaceId) => !currentOrder.includes(surfaceId)),
+  ];
+  const targetIndex = nextOrder.indexOf(targetSurfaceId);
+  const selectedIndex = nextOrder.indexOf(selectedSurfaceId);
+
+  if (targetIndex === -1 || selectedIndex === -1) {
+    return nextOrder;
+  }
+
+  [nextOrder[targetIndex], nextOrder[selectedIndex]] = [
+    nextOrder[selectedIndex],
+    nextOrder[targetIndex],
+  ];
+
+  return nextOrder;
+}
+
+function activeDominantSurfaceId(
+  surfaces: MediaSurface[],
+  dominantSurfaceId: MediaSurfaceId | null,
+  layoutMode: MediaLayoutMode,
+) {
+  const availableSurfaces = surfaces.filter(
+    (surface) => surface.stream || surface.kind === "participant",
+  );
+  const screenSurface = availableSurfaces.find((surface) => surface.kind === "screen");
+  const participantSurfaces = availableSurfaces.filter(
+    (surface) => surface.kind === "participant",
+  );
+  const selectedSurface = availableSurfaces.find(
+    (surface) => surface.id === dominantSurfaceId,
+  );
+
+  if (screenSurface) {
+    return (selectedSurface ?? screenSurface).id;
+  }
+
+  const selectedParticipant =
+    selectedSurface?.kind === "participant" ? selectedSurface : null;
+  const speakingSurface = participantSurfaces.find((surface) => surface.isSpeaking);
+  const effectiveLayoutMode =
+    participantSurfaces.length > 1 ? layoutMode : "gallery";
+
+  if (
+    (effectiveLayoutMode !== "focus" && effectiveLayoutMode !== "speaker") ||
+    participantSurfaces.length === 0
+  ) {
+    return null;
+  }
+
+  return (
+    (effectiveLayoutMode === "speaker"
+      ? speakingSurface ?? selectedParticipant ?? participantSurfaces[0]
+      : selectedParticipant ?? speakingSurface ?? participantSurfaces[0]
+    ).id
+  );
+}
+
 export function CallRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const socket = useMemo(() => getSocket(), []);
@@ -785,6 +877,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showScreenShareSettings, setShowScreenShareSettings] = useState(false);
   const [showLayoutPicker, setShowLayoutPicker] = useState(false);
+  const [surfacePickerTarget, setSurfacePickerTarget] =
+    useState<SurfacePickerTarget | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [startWithCameraOff, setStartWithCameraOff] = useState(false);
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
@@ -795,6 +889,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [dominantSurface, setDominantSurface] = useState<MediaSurfaceId | null>(
     null,
   );
+  const [surfaceOrder, setSurfaceOrder] = useState<MediaSurfaceId[]>([]);
   const [fullscreenSurface, setFullscreenSurface] = useState<MediaSurfaceId | null>(
     null,
   );
@@ -1595,7 +1690,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, []);
 
   useEffect(() => {
-    if (!showSettings && !showLayoutPicker && !showScreenShareSettings) {
+    if (
+      !showSettings &&
+      !showLayoutPicker &&
+      !showScreenShareSettings &&
+      !surfacePickerTarget
+    ) {
       return;
     }
 
@@ -1604,6 +1704,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         setShowSettings(false);
         setShowLayoutPicker(false);
         setShowScreenShareSettings(false);
+        setSurfacePickerTarget(null);
         setScreenShareQuality((current) => activeScreenShareQuality ?? current);
       }
     }
@@ -1620,6 +1721,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     showLayoutPicker,
     showScreenShareSettings,
     showSettings,
+    surfacePickerTarget,
   ]);
 
   useEffect(() => {
@@ -2983,6 +3085,56 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
+  function handleOpenSurfacePicker(
+    surfaceId: MediaSurfaceId,
+    slot: MediaSurfacePlacement,
+    scope: SurfacePickerTarget["scope"] = "call",
+  ) {
+    setSurfacePickerTarget({ scope, slot, surfaceId });
+  }
+
+  function handleSelectSurfaceForTarget(selectedSurfaceId: MediaSurfaceId) {
+    if (!surfacePickerTarget) {
+      return;
+    }
+
+    if (surfacePickerTarget.scope === "fullscreen") {
+      setFullscreenSurface(selectedSurfaceId);
+      setDominantSurface(selectedSurfaceId);
+      setSurfacePickerTarget(null);
+      return;
+    }
+
+    if (surfacePickerTarget.slot === "dominant") {
+      setDominantSurface(selectedSurfaceId);
+      setSurfacePickerTarget(null);
+      return;
+    }
+
+    const currentDominantSurfaceId = activeDominantSurfaceId(
+      orderedSurfaces,
+      dominantSurface,
+      mediaLayoutMode,
+    );
+
+    if (selectedSurfaceId === currentDominantSurfaceId) {
+      setDominantSurface(surfacePickerTarget.surfaceId);
+    }
+
+    if (selectedSurfaceId !== surfacePickerTarget.surfaceId) {
+      setSurfaceOrder((currentOrder) =>
+        swapSurfaceOrder(
+          currentOrder,
+          orderedSurfaces,
+          surfacePickerTarget.surfaceId,
+          selectedSurfaceId,
+        ),
+      );
+    }
+
+    setSurfacePickerTarget(null);
+  }
+
   function handleMediaLayoutModeChange(nextMode: MediaLayoutMode) {
     setMediaLayoutMode(nextMode);
     saveMediaLayoutMode(nextMode);
@@ -3144,6 +3296,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     return nextSurfaces;
   })();
+  const orderedSurfaces = orderMediaSurfaces(surfaces, surfaceOrder);
+  const fullscreenSurfaceKind = fullscreenSurface
+    ? orderedSurfaces.find((surface) => surface.id === fullscreenSurface)?.kind ?? null
+    : null;
+  const surfacePickerSelectedId = surfacePickerTarget?.surfaceId ?? null;
+  const surfacePickerTitleKey =
+    surfacePickerTarget?.slot === "dominant"
+      ? "chooseDominantView"
+      : "chooseSmallView";
 
   const captionSpeakerNames = useMemo(() => {
     const names: Record<string, string> = {
@@ -3654,10 +3815,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
                     <VideoGrid
                       language={language}
                       layoutMode={mediaLayoutMode}
-                      surfaces={surfaces}
+                      surfaces={orderedSurfaces}
                       dominantSurfaceId={dominantSurface}
                       onFullscreenSurface={handleEnterFullscreen}
-                      onSelectSurface={(surfaceId) => setDominantSurface(surfaceId)}
+                      onSelectSurface={(surfaceId, slot) =>
+                        handleOpenSurfacePicker(surfaceId, slot)
+                      }
                     />
                   )}
 
@@ -3700,16 +3863,22 @@ export function CallRoom({ roomId }: { roomId: string }) {
       {fullscreenSurface && language ? (
         <section
           ref={fullscreenShellRef}
-          className="media-fullscreen-shell"
+          className={`media-fullscreen-shell ${
+            fullscreenSurfaceKind === "screen"
+              ? "is-screen-share-fullscreen"
+              : "is-participant-fullscreen"
+          }`}
           aria-label={t(language, "fullscreenSurface")}
         >
           <div className="media-fullscreen-stage">
             <VideoGrid
               language={language}
               layoutMode="focus"
-              surfaces={surfaces}
+              surfaces={orderedSurfaces}
               dominantSurfaceId={fullscreenSurface}
-              onSelectSurface={(surfaceId) => setDominantSurface(surfaceId)}
+              onSelectSurface={(surfaceId, slot) =>
+                handleOpenSurfacePicker(surfaceId, slot, "fullscreen")
+              }
             />
           </div>
           <div className="media-fullscreen-topbar">
@@ -3741,6 +3910,87 @@ export function CallRoom({ roomId }: { roomId: string }) {
             />
           </aside>
         </section>
+      ) : null}
+
+      {surfacePickerTarget && language ? (
+        <div
+          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
+          onClick={() => setSurfacePickerTarget(null)}
+        >
+          <section
+            aria-labelledby="surface-picker-modal-title"
+            aria-modal="true"
+            className="settings-modal surface-picker-modal max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-hidden"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-ribbon" aria-hidden="true" />
+            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
+              <div className="min-w-0">
+                <p className="garden-kicker flex items-center gap-2">
+                  <LayoutGrid
+                    className="garden-icon-blush h-4 w-4"
+                    aria-hidden="true"
+                  />
+                  {t(language, "viewControl")}
+                </p>
+                <h2
+                  className="garden-title mt-2 text-2xl"
+                  id="surface-picker-modal-title"
+                >
+                  {t(language, surfacePickerTitleKey)}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label={t(language, "closeLayoutPicker")}
+                onClick={() => setSurfacePickerTarget(null)}
+                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="surface-picker-options grid gap-3 px-5 pb-5">
+              {orderedSurfaces.map((surface) => {
+                const Icon = surface.kind === "screen" ? ScreenShare : Camera;
+                const isCurrentSurface = surface.id === surfacePickerSelectedId;
+                const surfaceStatus =
+                  surface.status ||
+                  t(
+                    language,
+                    surface.kind === "screen" ? "shareControl" : "cameraControl",
+                  );
+
+                return (
+                  <button
+                    key={surface.id}
+                    type="button"
+                    onClick={() => handleSelectSurfaceForTarget(surface.id)}
+                    className={`view-layout-option surface-picker-option ${
+                      isCurrentSurface ? "is-selected" : ""
+                    }`}
+                  >
+                    <span
+                      className={`surface-picker-preview is-${surface.kind}`}
+                      aria-hidden="true"
+                    >
+                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <span className="view-layout-option-copy surface-picker-option-copy">
+                      <span>{surface.label}</span>
+                      <small>
+                        {isCurrentSurface
+                          ? t(language, "selected")
+                          : surfaceStatus}
+                      </small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {showLayoutPicker && language ? (

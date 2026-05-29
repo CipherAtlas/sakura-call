@@ -13,6 +13,7 @@ export type MediaLayoutMode =
   | "collage"
   | "compact";
 export type MediaSurfaceSlot = "dominant" | "small";
+export type MediaSurfacePlacement = MediaSurfaceSlot | "tile";
 
 export type MediaSurface = {
   hasVideo?: boolean;
@@ -57,7 +58,7 @@ function hasLiveVideoTrack(stream: MediaStream | null) {
 
 function renderParticipantSurface(
   surface: MediaSurface,
-  slot: MediaSurfaceSlot | "tile",
+  slot: MediaSurfacePlacement,
   {
     fullscreenLabel,
     onFullscreenSurface,
@@ -66,13 +67,16 @@ function renderParticipantSurface(
   }: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
+    onSelectSurface?: (
+      surfaceId: MediaSurfaceId,
+      slot: MediaSurfacePlacement,
+    ) => void;
     selectLabel: string;
   },
 ) {
   const Icon = surface.isLocal ? Flower2 : Leaf;
   const hasVideo = Boolean(surface.hasVideo || hasLiveVideoTrack(surface.stream));
-  const handleSelect = () => onSelectSurface?.(surface.id);
+  const handleSelect = () => onSelectSurface?.(surface.id, slot);
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -139,7 +143,7 @@ function renderParticipantSurface(
 
 function renderScreenSurface(
   surface: MediaSurface,
-  slot: MediaSurfaceSlot,
+  slot: MediaSurfacePlacement,
   {
     fullscreenLabel,
     onFullscreenSurface,
@@ -148,11 +152,14 @@ function renderScreenSurface(
   }: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
+    onSelectSurface?: (
+      surfaceId: MediaSurfaceId,
+      slot: MediaSurfacePlacement,
+    ) => void;
     selectLabel: string;
   },
 ) {
-  const handleSelect = () => onSelectSurface?.(surface.id);
+  const handleSelect = () => onSelectSurface?.(surface.id, slot);
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -199,16 +206,19 @@ function renderScreenSurface(
 
 function renderSurface(
   surface: MediaSurface,
-  slot: MediaSurfaceSlot | "tile",
+  slot: MediaSurfacePlacement,
   actions: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
+    onSelectSurface?: (
+      surfaceId: MediaSurfaceId,
+      slot: MediaSurfacePlacement,
+    ) => void;
     selectLabel: string;
   },
 ) {
   return surface.kind === "screen"
-    ? renderScreenSurface(surface, slot === "tile" ? "dominant" : slot, actions)
+    ? renderScreenSurface(surface, slot, actions)
     : renderParticipantSurface(surface, slot, actions);
 }
 
@@ -224,7 +234,10 @@ export function VideoGrid({
   layoutMode: MediaLayoutMode;
   language: Language;
   onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-  onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
+  onSelectSurface?: (
+    surfaceId: MediaSurfaceId,
+    slot: MediaSurfacePlacement,
+  ) => void;
   surfaces: MediaSurface[];
 }) {
   const availableSurfaces = surfaces.filter((surface) => surface.stream || surface.kind === "participant");
@@ -232,44 +245,53 @@ export function VideoGrid({
   const participantSurfaces = availableSurfaces.filter(
     (surface) => surface.kind === "participant",
   );
-  const selectedSurface = participantSurfaces.find(
+  const selectedSurface = availableSurfaces.find(
     (surface) => surface.id === dominantSurfaceId,
   );
+  const selectedParticipant =
+    selectedSurface?.kind === "participant" ? selectedSurface : null;
   const speakingSurface = participantSurfaces.find((surface) => surface.isSpeaking);
   const effectiveLayoutMode =
     participantSurfaces.length > 1 ? layoutMode : "gallery";
   const preferredParticipant =
     effectiveLayoutMode === "speaker"
-      ? speakingSurface ?? selectedSurface ?? participantSurfaces[0] ?? null
-      : selectedSurface ?? speakingSurface ?? participantSurfaces[0] ?? null;
+      ? speakingSurface ?? selectedParticipant ?? participantSurfaces[0] ?? null
+      : selectedParticipant ?? speakingSurface ?? participantSurfaces[0] ?? null;
 
   if (!screenSurface && participantSurfaces.length === 0) {
     return null;
   }
 
   if (screenSurface) {
+    const dominantSharedSurface = selectedSurface ?? screenSurface;
+    const stripSurfaces = availableSurfaces.filter(
+      (surface) => surface.id !== dominantSharedSurface.id,
+    );
+
     return (
       <section className="media-layout media-layout-group has-screen-share">
         <div className="media-dominant-slot">
-          {renderSurface(screenSurface, "dominant", {
+          {renderSurface(dominantSharedSurface, "dominant", {
             fullscreenLabel: t(language, "fullscreenSurface"),
             onFullscreenSurface,
             onSelectSurface,
             selectLabel: t(language, "openDominantPicker"),
           })}
         </div>
-        <div className="media-gallery-strip" aria-label={t(language, "participants")}>
-          {participantSurfaces.map((surface) => (
-            <div className="media-gallery-tile" key={surface.id}>
-              {renderSurface(surface, "tile", {
-                fullscreenLabel: t(language, "fullscreenSurface"),
-                onFullscreenSurface,
-                onSelectSurface,
-                selectLabel: t(language, "openDominantPicker"),
-              })}
-            </div>
-          ))}
-        </div>
+        {stripSurfaces.length > 0 ? (
+          <div className="media-gallery-strip" aria-label={t(language, "participants")}>
+            {stripSurfaces.map((surface) => (
+              <div className="media-gallery-tile" key={surface.id}>
+                {renderSurface(surface, "tile", {
+                  fullscreenLabel: t(language, "fullscreenSurface"),
+                  onFullscreenSurface,
+                  onSelectSurface,
+                  selectLabel: t(language, "openDominantPicker"),
+                })}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
     );
   }

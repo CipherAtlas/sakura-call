@@ -3518,6 +3518,45 @@ body.garden-fullscreen-open {
   line-height: 1;
 }
 
+.surface-picker-options {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.surface-picker-option {
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 5.2rem;
+}
+
+.surface-picker-preview {
+  align-items: center;
+  background:
+    radial-gradient(circle at 62% 30%, rgba(255, 214, 229, 0.22), transparent 2.4rem),
+    #3a2432;
+  border: 1px solid rgba(217, 93, 138, 0.2);
+  border-radius: 0.5rem;
+  color: #fffdf8;
+  display: inline-flex;
+  height: 3.2rem;
+  justify-content: center;
+  width: 4.6rem;
+}
+
+.surface-picker-preview.is-participant {
+  background:
+    radial-gradient(circle at 58% 26%, rgba(255, 214, 229, 0.36), transparent 2.3rem),
+    linear-gradient(145deg, #7f3e68 0%, #e184a5 100%);
+  border-color: rgba(255, 214, 229, 0.42);
+}
+
+.surface-picker-preview svg {
+  stroke-width: 2.35;
+}
+
+.surface-picker-option-copy {
+  min-width: 0;
+}
+
 .subtitle-panel {
   background: var(--gradient-panel-strong);
   grid-template-rows: auto minmax(0, 1fr);
@@ -6686,6 +6725,328 @@ body.garden-fullscreen-open {
     border-radius: 0.72rem;
     height: 2.8rem;
     width: 2.8rem;
+  }
+}
+
+/* Meeting layout repairs: keep camera frames intact and reserve caption space. */
+.participant-surface.has-video .media-video {
+  object-fit: contain;
+}
+
+.media-fullscreen-shell {
+  gap: 0.72rem;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 25vw);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.media-fullscreen-stage {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.media-fullscreen-stage .media-layout-group {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.media-fullscreen-stage .media-gallery-strip {
+  display: none;
+}
+
+.media-fullscreen-conversation {
+  align-self: stretch;
+  bottom: auto;
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  height: 100%;
+  left: auto;
+  max-height: none;
+  min-height: 0;
+  position: relative;
+  right: auto;
+  top: auto;
+  width: auto;
+}
+
+.media-fullscreen-conversation .conversation-panel {
+  height: 100%;
+}
+
+.media-fullscreen-chat-pill {
+  display: none;
+}
+
+.media-fullscreen-stage .media-label {
+  max-width: min(22rem, calc(100% - 2.3rem));
+}
+
+@media (min-width: 901px) {
+  .call-shell-live.call-shell-active {
+    height: min(58rem, calc(100dvh - 1.25rem));
+  }
+
+  .call-shell-live .call-topbar.is-active-call {
+    min-height: 5.45rem;
+    padding: 1rem 1.25rem;
+  }
+
+  .call-shell-live .call-topbar-title {
+    font-size: clamp(1.42rem, 2vw, 1.95rem);
+  }
+
+  .call-shell-live .active-call-workspace {
+    gap: 0.9rem;
+    grid-template-columns: minmax(0, 1fr) clamp(18rem, 24vw, 24rem);
+  }
+
+  .call-shell-live .conversation-panel {
+    padding: 1rem;
+  }
+
+  .call-shell-live .conversation-header {
+    margin-bottom: 0.95rem;
+  }
+
+  .call-shell-live .call-control-bar {
+    gap: 0.48rem;
+    max-width: min(100%, 40rem);
+    padding: 0.62rem 0.8rem 0.58rem;
+    width: min(100%, 40rem);
+  }
+
+  .call-shell-live .call-control-icon {
+    height: 2.85rem;
+    width: 2.85rem;
+  }
+}
+
+@media (min-width: 901px) and (max-height: 820px) {
+  .call-shell-live .call-topbar.is-active-call {
+    min-height: 4.7rem;
+    padding: 0.72rem 1rem;
+  }
+
+  .call-shell-live .call-control-bar {
+    padding: 0.5rem 0.72rem 0.46rem;
+  }
+
+  .call-shell-live .call-control-icon {
+    height: 2.6rem;
+    width: 2.6rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .call-scene-active {
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: max(0.38rem, env(safe-area-inset-top)) 0.42rem
+      max(0.38rem, env(safe-area-inset-bottom));
+  }
+
+  .call-active-layout {
+    gap: 0.38rem;
+    grid-template-rows: minmax(3.25rem, auto) minmax(0, 1fr) auto;
+  }
+
+  .call-shell-live .call-active-layout > .call-topbar.garden-panel:first-child {
+    min-height: 3.35rem;
+    padding: 0.42rem 0.56rem;
+  }
+
+  .call-shell-live
+    .call-active-layout
+    > .call-topbar.garden-panel:first-child
+    .call-topbar-kicker {
+    display: none;
+  }
+
+  .call-shell-live
+    .call-active-layout
+    > .call-topbar.garden-panel:first-child
+    .call-topbar-title {
+    font-size: 0.98rem;
+    line-height: 1.02;
+  }
+
+  .call-shell-live .call-topbar-status-dot {
+    height: 0.5rem;
+    width: 0.5rem;
+  }
+
+  .call-shell-live .call-topbar-copy .garden-muted {
+    font-size: 0.72rem;
+    line-height: 1;
+    margin-top: 0.16rem;
+  }
+
+  .call-shell-live .call-topbar-actions .garden-icon-button {
+    height: 2.45rem;
+    width: 2.45rem;
+  }
+
+  .call-topbar-actions .room-code-button {
+    height: 2.45rem;
+    min-height: 2.45rem;
+  }
+
+  .call-shell-live .active-call-workspace {
+    gap: 0.4rem;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.55fr) minmax(8.6rem, 0.65fr);
+  }
+
+  .media-gallery-grid {
+    gap: 0.4rem;
+    padding: 0.4rem;
+  }
+
+  .media-gallery-strip {
+    gap: 0.4rem;
+    grid-auto-columns: minmax(7.5rem, 10.5rem);
+  }
+
+  .media-gallery-tile,
+  .media-surface.is-tile {
+    min-height: 7.2rem;
+  }
+
+  .media-layout-focus,
+  .media-layout-speaker,
+  .media-layout-group.has-screen-share {
+    gap: 0.4rem;
+    grid-template-rows: minmax(0, 1fr) minmax(7.2rem, auto);
+  }
+
+  .conversation-panel {
+    padding: 0.58rem 0.62rem;
+  }
+
+  .call-shell-live .conversation-panel {
+    padding: 0.62rem;
+  }
+
+  .call-shell-live .conversation-header {
+    margin-bottom: 0.42rem;
+  }
+
+  .call-shell-live .conversation-header h2 {
+    font-size: 0.94rem;
+  }
+
+  .conversation-scroll > .garden-muted {
+    font-size: 0.88rem;
+    line-height: 1.18;
+    max-width: 15.5rem;
+    padding-bottom: 0.5rem;
+    padding-top: 0.5rem;
+  }
+
+  .call-shell-live .call-control-bar {
+    gap: 0.18rem;
+    padding: 0.34rem 0.34rem 0.32rem;
+  }
+
+  .call-shell-live .call-control-icon {
+    height: 2.24rem;
+    width: 2.24rem;
+  }
+
+  .call-shell-live .call-control-label {
+    font-size: 0.56rem;
+  }
+
+  .media-fullscreen-shell,
+  .media-fullscreen-shell.is-screen-share-fullscreen {
+    gap: 0.42rem;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(8.6rem, 29dvh);
+    height: 100dvh;
+    inset: 0;
+    min-height: 100dvh;
+    padding: 0.42rem;
+    transform: none;
+    transform-origin: center;
+    width: 100dvw;
+  }
+
+  .media-fullscreen-stage {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .media-fullscreen-conversation,
+  .media-fullscreen-shell.is-screen-share-fullscreen
+    .media-fullscreen-conversation {
+    bottom: auto;
+    grid-column: 1;
+    grid-row: 2;
+    left: auto;
+    max-height: none;
+    min-height: 0;
+    position: relative;
+    right: auto;
+    top: auto;
+    width: auto;
+  }
+
+  .media-fullscreen-conversation .conversation-panel {
+    padding: 0.62rem;
+  }
+
+  .media-fullscreen-stage .media-label,
+  .media-fullscreen-shell.is-screen-share-fullscreen
+    .media-fullscreen-stage
+    .media-label {
+    max-width: min(17rem, calc(100% - 1.44rem));
+    top: 3.2rem;
+  }
+}
+
+@media (max-width: 640px) and (max-height: 720px) {
+  .call-shell-live .active-call-workspace {
+    grid-template-rows: minmax(0, 1.7fr) minmax(7.2rem, 0.55fr);
+  }
+
+  .media-gallery-tile,
+  .media-surface.is-tile {
+    min-height: 6.5rem;
+  }
+
+  .media-layout-focus,
+  .media-layout-speaker,
+  .media-layout-group.has-screen-share {
+    grid-template-rows: minmax(0, 1fr) minmax(6.5rem, auto);
+  }
+
+  .media-fullscreen-shell,
+  .media-fullscreen-shell.is-screen-share-fullscreen {
+    grid-template-rows: minmax(0, 1fr) minmax(7.4rem, 27dvh);
+  }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  .call-shell-live .active-call-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(10.5rem, 28vw);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .call-shell-live .conversation-panel {
+    padding: 0.48rem;
+  }
+
+  .media-fullscreen-shell,
+  .media-fullscreen-shell.is-screen-share-fullscreen {
+    grid-template-columns: minmax(0, 1fr) minmax(12rem, 30vw);
+    grid-template-rows: minmax(0, 1fr);
+    transform: none;
+  }
+
+  .media-fullscreen-conversation,
+  .media-fullscreen-shell.is-screen-share-fullscreen
+    .media-fullscreen-conversation {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 
