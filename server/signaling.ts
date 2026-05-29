@@ -18,9 +18,13 @@ import {
   joinRoom,
   leaveRoom,
   markParticipantDisconnected,
+  maxRoomParticipants,
   Participant,
+  Room,
   participantReconnectTtlMs,
+  startScreenShare,
   startSubtitleService,
+  stopScreenShare,
   stopSubtitleService,
   updateParticipantLanguage
 } from "./rooms";
@@ -118,11 +122,12 @@ function emitRoomStatus(io: Server, roomId: string) {
   }
 
   io.to(roomId).emit("room:status", {
+    maxParticipants: room.maxParticipants,
     participantCount: room.participants.size
   });
 }
 
-function emitToOtherParticipant(
+function emitToOtherParticipants(
   io: Server,
   roomId: string,
   participantId: string,
@@ -139,6 +144,24 @@ function emitToOtherParticipant(
       io.to(participant.socketId).emit(event, payload);
     }
   }
+}
+
+function emitToParticipant(
+  io: Server,
+  roomId: string,
+  participantId: string,
+  event: string,
+  payload: unknown
+) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+
+  if (!participant?.socketId) {
+    return false;
+  }
+
+  io.to(participant.socketId).emit(event, payload);
+  return true;
 }
 
 function emitRoomEnded(io: Server, roomId: string, endedBy: string) {
@@ -159,6 +182,9 @@ function scheduleDisconnectExpiry(
   const key = disconnectExpiryKey(roomId, participantId);
   const timer = setTimeout(() => {
     disconnectExpiryTimers.delete(key);
+    const roomBeforeExpire = getRoom(roomId);
+    const wasScreenSharing =
+      roomBeforeExpire?.activeScreenShareParticipantId === participantId;
     const result = expireDisconnectedParticipant(roomId, participantId);
 
     if (!result.expired || !result.participant) {
@@ -171,7 +197,14 @@ function scheduleDisconnectExpiry(
       return;
     }
 
-    emitToOtherParticipant(io, roomId, participantId, "peer:left", {
+    if (wasScreenSharing) {
+      emitToOtherParticipants(io, roomId, participantId, "media:screen-stopped", {
+        from: participantId,
+        roomId
+      });
+    }
+
+    emitToOtherParticipants(io, roomId, participantId, "peer:left", {
       participantId
     });
     emitRoomStatus(io, roomId);
@@ -207,6 +240,28 @@ function publicParticipant(participant: Participant) {
   };
 }
 
+export function isAuthorizedPeerTarget({
+  room,
+  senderParticipantId,
+  toParticipantId
+}: {
+  room: Room;
+  senderParticipantId: string;
+  toParticipantId: unknown;
+}) {
+  const normalizedTargetId =
+    typeof toParticipantId === "string" ? toParticipantId : "";
+  const sender = room.participants.get(senderParticipantId);
+  const target = room.participants.get(normalizedTargetId);
+
+  return Boolean(
+    normalizedTargetId &&
+      sender?.socketId &&
+      target?.socketId &&
+      normalizedTargetId !== senderParticipantId
+  );
+}
+
 function emitAuthorizedPeerEvent(
   io: Server,
   socketId: string,
@@ -214,14 +269,24 @@ function emitAuthorizedPeerEvent(
   payload: Record<string, unknown>
 ) {
   const match = getSocketParticipant(socketId);
-  if (!match) {
+  const toParticipantId =
+    typeof payload.toParticipantId === "string" ? payload.toParticipantId : "";
+
+  if (
+    !match ||
+    !isAuthorizedPeerTarget({
+      room: match.room,
+      senderParticipantId: match.participant.participantId,
+      toParticipantId
+    })
+  ) {
     return;
   }
 
-  emitToOtherParticipant(
+  emitToParticipant(
     io,
     match.room.roomId,
-    match.participant.participantId,
+    toParticipantId,
     event,
     {
       ...payload,
@@ -336,15 +401,20 @@ export function createSignalingServer(httpServer: HttpServer) {
         ok: true,
         participant: publicParticipant(result.participant),
         otherParticipants: result.otherParticipants.map(publicParticipant),
+        activeScreenShareParticipantId: getRoom(roomId)?.activeScreenShareParticipantId,
+        maxParticipants: getRoom(roomId)?.maxParticipants ?? maxRoomParticipants,
         participantCount: result.participantCount,
         isCreator: result.participant.isHost,
         subtitleServiceStarted: result.subtitleServiceStarted,
         participantSessionToken: result.participantSessionToken
       });
 
-      emitToOtherParticipant(io, roomId, participantId, "peer:joined", {
+      emitToOtherParticipants(io, roomId, participantId, "peer:joined", {
         participantId,
         displayName: result.participant.displayName,
+        isHost: result.participant.isHost,
+        joinedAt: result.participant.joinedAt,
+        lastSeenAt: result.participant.lastSeenAt,
         spokenLanguage: result.participant.spokenLanguage
       });
       emitRoomStatus(io, roomId);
@@ -418,38 +488,120 @@ export function createSignalingServer(httpServer: HttpServer) {
 
     socket.on("webrtc:offer", (payload) => {
       emitAuthorizedPeerEvent(io, socket.id, "webrtc:offer", {
+        toParticipantId: payload?.toParticipantId,
         description: payload?.description
       });
     });
 
     socket.on("webrtc:answer", (payload) => {
       emitAuthorizedPeerEvent(io, socket.id, "webrtc:answer", {
+        toParticipantId: payload?.toParticipantId,
         description: payload?.description
       });
     });
 
     socket.on("webrtc:ice-candidate", (payload) => {
       emitAuthorizedPeerEvent(io, socket.id, "webrtc:ice-candidate", {
+        toParticipantId: payload?.toParticipantId,
         candidate: payload?.candidate
       });
     });
 
     socket.on("media:screen-started", (payload) => {
-      emitAuthorizedPeerEvent(io, socket.id, "media:screen-started", {
-        streamId: payload?.streamId
+      const match = getSocketParticipant(socket.id);
+
+      if (!match) {
+        return;
+      }
+
+      const result = startScreenShare(
+        match.room.roomId,
+        match.participant.participantId,
+        payload?.streamId
+      );
+
+      if (!result.ok) {
+        socket.emit("media:screen-rejected", {
+          reason: result.reason,
+          activeParticipantId:
+            "activeParticipantId" in result ? result.activeParticipantId : undefined
+        });
+        return;
+      }
+
+      emitToOtherParticipants(
+        io,
+        match.room.roomId,
+        match.participant.participantId,
+        "media:screen-started",
+        {
+          from: match.participant.participantId,
+          roomId: match.room.roomId,
+          streamId: result.streamId
+        }
+      );
+      socket.emit("media:screen-accepted", {
+        roomId: match.room.roomId,
+        streamId: result.streamId
       });
     });
 
     socket.on("media:screen-stopped", () => {
-      emitAuthorizedPeerEvent(io, socket.id, "media:screen-stopped", {});
+      const match = getSocketParticipant(socket.id);
+
+      if (!match) {
+        return;
+      }
+
+      stopScreenShare(match.room.roomId, match.participant.participantId);
+      emitToOtherParticipants(
+        io,
+        match.room.roomId,
+        match.participant.participantId,
+        "media:screen-stopped",
+        {
+          from: match.participant.participantId,
+          roomId: match.room.roomId
+        }
+      );
     });
 
     socket.on("media:camera-started", () => {
-      emitAuthorizedPeerEvent(io, socket.id, "media:camera-started", {});
+      const match = getSocketParticipant(socket.id);
+
+      if (!match) {
+        return;
+      }
+
+      emitToOtherParticipants(
+        io,
+        match.room.roomId,
+        match.participant.participantId,
+        "media:camera-started",
+        {
+          from: match.participant.participantId,
+          roomId: match.room.roomId
+        }
+      );
     });
 
     socket.on("media:camera-stopped", () => {
-      emitAuthorizedPeerEvent(io, socket.id, "media:camera-stopped", {});
+      const match = getSocketParticipant(socket.id);
+
+      if (!match) {
+        return;
+      }
+
+      emitToOtherParticipants(
+        io,
+        match.room.roomId,
+        match.participant.participantId,
+        "media:camera-stopped",
+        {
+          from: match.participant.participantId,
+          roomId: match.room.roomId
+        }
+      );
     });
 
     socket.on("audio:segment", async (payload: AudioSegmentPayload) => {
@@ -486,6 +638,17 @@ export function createSignalingServer(httpServer: HttpServer) {
         }
 
         const timestamp = Date.now();
+        const previewCaption = buildCaption({
+          roomId: room.roomId,
+          speaker: participant,
+          originalText,
+          translatedLanguage: participant.spokenLanguage,
+          translatedText: originalText,
+          isFinal: payload.isFinal,
+          timestamp
+        });
+
+        socket.emit("caption:preview", previewCaption);
 
         for (const recipient of room.participants.values()) {
           if (recipient.participantId === participant.participantId) {
@@ -517,7 +680,6 @@ export function createSignalingServer(httpServer: HttpServer) {
           });
 
           io.to(recipient.socketId).emit("caption", caption);
-          socket.emit("caption:preview", caption);
         }
       } catch (error) {
         socket.emit("caption:error", {
@@ -535,6 +697,7 @@ export function createSignalingServer(httpServer: HttpServer) {
       const { room, participant } = match;
       const roomId = room.roomId;
       const participantId = participant.participantId;
+      const wasScreenSharing = room.activeScreenShareParticipantId === participantId;
       const leaveResult = leaveRoom(roomId, participantId);
       socketParticipantSessions.delete(socket.id);
       clearDisconnectExpiry(roomId, participantId);
@@ -545,7 +708,14 @@ export function createSignalingServer(httpServer: HttpServer) {
         return;
       }
 
-      emitToOtherParticipant(io, roomId, participantId, "peer:left", {
+      if (wasScreenSharing) {
+        emitToOtherParticipants(io, roomId, participantId, "media:screen-stopped", {
+          from: participantId,
+          roomId
+        });
+      }
+
+      emitToOtherParticipants(io, roomId, participantId, "peer:left", {
         participantId
       });
       socket.leave(roomId);
@@ -559,17 +729,26 @@ export function createSignalingServer(httpServer: HttpServer) {
         return;
       }
 
-      markParticipantDisconnected(
-        match.room.roomId,
-        match.participant.participantId
-      );
+      const roomId = match.room.roomId;
+      const participantId = match.participant.participantId;
+      const wasScreenSharing =
+        match.room.activeScreenShareParticipantId === participantId;
+
+      markParticipantDisconnected(roomId, participantId);
       socketParticipantSessions.delete(socket.id);
-      scheduleDisconnectExpiry(
-        io,
-        match.room.roomId,
-        match.participant.participantId
-      );
-      emitRoomStatus(io, match.room.roomId);
+
+      if (wasScreenSharing) {
+        emitToOtherParticipants(io, roomId, participantId, "media:screen-stopped", {
+          from: participantId,
+          roomId
+        });
+      }
+
+      emitToOtherParticipants(io, roomId, participantId, "peer:left", {
+        participantId
+      });
+      scheduleDisconnectExpiry(io, roomId, participantId);
+      emitRoomStatus(io, roomId);
     });
   });
 

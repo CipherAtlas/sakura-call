@@ -175,6 +175,7 @@ export function ConversationPanel({
   remoteFinalCaption,
   remoteName,
   remotePartialCaption,
+  speakerNames = {},
 }: {
   language: Language;
   localCaptionLog?: CaptionEvent[];
@@ -185,6 +186,7 @@ export function ConversationPanel({
   remoteFinalCaption: CaptionEvent | null;
   remoteName: string;
   remotePartialCaption: CaptionEvent | null;
+  speakerNames?: Record<string, string>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -199,7 +201,7 @@ export function ConversationPanel({
     const remoteMessages = remoteCaptionLog.map((caption) => ({
       ...caption,
       isLocal: false,
-      speakerName: remoteName,
+      speakerName: speakerNames[caption.speakerId] ?? remoteName,
     }));
     const withLocalLive = appendLiveCaption(
       [...localMessages, ...remoteMessages],
@@ -211,7 +213,9 @@ export function ConversationPanel({
       withLocalLive,
       remotePartialCaption,
       false,
-      remoteName,
+      remotePartialCaption
+        ? speakerNames[remotePartialCaption.speakerId] ?? remoteName
+        : remoteName,
     );
 
     return withRemoteLive.sort((first, second) => {
@@ -228,6 +232,7 @@ export function ConversationPanel({
     remoteCaptionLog,
     remoteName,
     remotePartialCaption,
+    speakerNames,
   ]);
 
   useEffect(() => {

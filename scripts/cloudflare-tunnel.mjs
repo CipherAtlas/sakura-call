@@ -204,6 +204,7 @@ async function setup() {
 async function run() {
   const tunnel = await ensureTunnel();
   const tunnelToken = await getTunnelToken(tunnel.id);
+  let isStopping = false;
   console.log(
     `Starting Cloudflare tunnel with protocol=${tunnelProtocol} edge-ip-version=${tunnelEdgeIpVersion}`
   );
@@ -227,10 +228,36 @@ async function run() {
     }
   );
 
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
+  function stopChild() {
+    if (isStopping) {
       return;
+    }
+
+    isStopping = true;
+    child.kill("SIGTERM");
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 5_000);
+    timeout.unref();
+
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      process.exit(0);
+    });
+  }
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, stopChild);
+  }
+
+  child.on("exit", (code, signal) => {
+    if (isStopping) {
+      return;
+    }
+
+    if (signal) {
+      process.exit(1);
     }
 
     process.exit(code ?? 0);

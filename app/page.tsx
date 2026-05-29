@@ -276,7 +276,9 @@ export default function HomePage() {
         headers: {
           "content-type": "application/json"
         },
-        body: JSON.stringify({ spokenLanguage: language })
+        body: JSON.stringify({
+          spokenLanguage: language
+        })
       });
 
       if (response.status === 403) {

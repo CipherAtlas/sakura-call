@@ -1,5 +1,5 @@
 {
-  "name": "japanese-english-comms",
+  "name": "sakura-call",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,6 +10,7 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "start:public": "NODE_ENV=production PORT=3010 tsx server/index.ts",
     "lint": "eslint .",
+    "test": "node --import tsx --test \"server/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "tunnel:setup": "CLOUDFLARE_SERVICE_URL=http://localhost:3010 node scripts/cloudflare-tunnel.mjs setup",
     "tunnel:run": "node scripts/cloudflare-tunnel.mjs run"

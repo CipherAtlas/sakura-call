@@ -43,14 +43,69 @@ ssh_common_options=(
   -o ConnectTimeout=10
 )
 
+kill_process_tree() {
+  local signal="$1"
+  local pid="$2"
+  local child
+
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_process_tree "$signal" "$child"
+  done
+
+  kill -"$signal" "$pid" 2>/dev/null || true
+}
+
+wait_for_process_exit() {
+  local pid="$1"
+  local attempts="$2"
+
+  for _ in $(seq 1 "$attempts"); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+
+    sleep 0.25
+  done
+
+  return 1
+}
+
+stop_process_gracefully() {
+  local name="$1"
+  local pid="$2"
+  local grace_attempts="${3:-32}"
+
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    return
+  fi
+
+  echo "Stopping $name..."
+  kill -TERM "$pid" 2>/dev/null || true
+
+  if wait_for_process_exit "$pid" "$grace_attempts"; then
+    return
+  fi
+
+  echo "Force stopping $name..."
+  kill_process_tree TERM "$pid"
+
+  if wait_for_process_exit "$pid" 12; then
+    return
+  fi
+
+  kill_process_tree KILL "$pid"
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   trap - INT TERM HUP EXIT
 
   if [[ -n "$app_pid" || -n "$tunnel_pid" ]]; then
     echo
     echo "Stopping servers..."
-    kill ${app_pid:+"$app_pid"} ${tunnel_pid:+"$tunnel_pid"} 2>/dev/null || true
-    wait ${app_pid:+"$app_pid"} ${tunnel_pid:+"$tunnel_pid"} 2>/dev/null || true
+    stop_process_gracefully "app server" "$app_pid" 40
+    stop_process_gracefully "Cloudflare tunnel" "$tunnel_pid" 24
   fi
 
   if [[ "$turn_started" == "local" ]]; then
@@ -380,11 +435,11 @@ echo "Building production app..."
 npm run build
 
 echo "Starting production app server on http://localhost:3010..."
-npm run start:public &
+NODE_ENV=production PORT=3010 ./node_modules/.bin/tsx server/index.ts &
 app_pid=$!
 
 echo "Starting Cloudflare tunnel..."
-npm run tunnel:run &
+node scripts/cloudflare-tunnel.mjs run &
 tunnel_pid=$!
 
 echo

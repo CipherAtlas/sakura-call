@@ -37,7 +37,7 @@ export function LanguageGate({
                 <span>言語を選択</span>
               </h1>
               <p className="garden-muted entry-subtitle">
-                Pick the language you will speak. Captions can translate it for the other person.
+                Pick the language you will speak. Captions can translate it for others.
               </p>
 
               <form
@@ -87,7 +87,7 @@ export function LanguageGate({
               <span aria-hidden="true" />
               <Flower2 className="h-4 w-4" aria-hidden="true" />
               <span aria-hidden="true" />
-              <p>Private two-person calls</p>
+              <p>Private room calls</p>
             </footer>
           </div>
 

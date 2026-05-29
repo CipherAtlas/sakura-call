@@ -5,31 +5,31 @@
 <h1 align="center">Sakura Call</h1>
 
 <p align="center">
-  A private, on-demand, two-person WebRTC calling app with multilingual captions.
+  A private, on-demand, host-sized WebRTC calling app with multilingual captions.
 </p>
 
 <p align="center">
-  Audio, video, screen sharing, and optional live translated captions in one owner-operated room.
+  Audio, video, one-at-a-time screen sharing, and optional live translated captions in one owner-operated room.
 </p>
 
 ## Overview
 
-Sakura Call is a self-hosted communication tool for one owner and one guest. It is built for short, private calls: start the app when needed, use the call, and stop everything immediately afterward.
+Sakura Call is a self-hosted communication tool for one owner and invited participants. It is built for short, private calls: start the app when needed, use the call, and stop everything immediately afterward.
 
 The app intentionally keeps the product surface small:
 
-- Hard two-person room limit.
+- Fixed room capacity of up to 6 people.
 - Owner-controlled room creation.
 - 4-digit room code join flow.
 - Multilingual caption transcription and translation support.
-- Audio calls, video calls, and screen sharing.
+- Audio calls, video calls, and one-at-a-time screen sharing.
 - Live translated captions with a per-browser privacy acknowledgement.
 - Peer-to-peer WebRTC media first, with TURN fallback for restrictive networks.
-- No invite links, public room directory, user accounts, queues, group calls, or long-running service assumptions.
+- No invite links, public room directory, user accounts, queues, public meeting features, or long-running service assumptions.
 
 ## Privacy Model
 
-Audio, video, and screen sharing use encrypted WebRTC media transport between the two browsers. When a TURN relay is used, the relay forwards encrypted WebRTC packets, but it can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
+Audio, video, and screen sharing use encrypted WebRTC media transport between participating browsers. Group calls use a peer-to-peer mesh rather than server mixing. When a TURN relay is used, the relay forwards encrypted WebRTC packets, but it can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
 
 Live captions and translations are optional and use a different path. When a browser enables captions, that browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then relays translated subtitle text to the other participant and a preview back to the speaker.
 
@@ -105,7 +105,7 @@ Localhost is enough for basic browser microphone and UI testing. iPhone Safari a
 
 ## On-Demand Public Run
 
-For an actual call with one other person, use:
+For an actual private call, use:
 
 ```bash
 ./run.sh
@@ -147,12 +147,12 @@ The normal call flow is:
 4. Host creates a room.
 5. Host shares the 4-digit room code.
 6. Guest chooses a language, enters a display name, and enters the room code.
-7. Both people allow the needed media permissions.
-8. The room admits at most two participants.
+7. Participants allow the needed media permissions.
+8. The room admits up to 6 participants.
 9. The host starts captions if needed.
 10. Each browser accepts the captions privacy notice before its own microphone audio is sent for transcription.
 
-The meeting UI supports audio calls, video calls, and screen sharing. The conversation and captions section remains visible in every meeting mode.
+The meeting UI supports audio calls, video calls, and one-at-a-time screen sharing. Group calls use a peer-to-peer mesh, so each additional participant increases browser CPU and bandwidth usage. The conversation and captions section remains visible in every meeting mode.
 
 ## Environment Variables
 
@@ -328,7 +328,7 @@ run.sh                       On-demand public runtime script
 ## Limitations
 
 - This is not a scalable public calling service.
-- It supports exactly two participants.
+- It supports rooms with up to 6 participants.
 - It supports the configured OpenAI speech-to-text language set for captions.
 - Room and participant state are in memory.
 - There is no database, account system, public room listing, queue, monitoring stack, CI/CD pipeline, or production deployment target.
@@ -345,7 +345,7 @@ Before a real call, confirm:
 - The host can unlock host mode.
 - The host can create a room and copy the 4-digit code.
 - The guest can join with the language, name, and room code flow.
-- A third participant is blocked.
+- Participants beyond the 6-person room capacity are blocked.
 - Audio, video, and screen sharing controls work for the selected browser.
 - The conversation and captions section remains visible during audio, video, and screen-sharing states.
 - Each viewer receives subtitles translated into their selected spoken language.

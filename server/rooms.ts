@@ -23,6 +23,8 @@ export type Room = {
   roomCode: string;
   creatorSecret: string;
   createdAt: number;
+  maxParticipants: number;
+  activeScreenShareParticipantId?: string;
   subtitleServiceStarted: boolean;
   participants: Map<string, Participant>;
   failedAttempts: Map<string, FailedAttempts>;
@@ -33,6 +35,7 @@ const roomTtlMs = 4 * 60 * 60 * 1000;
 export const participantReconnectTtlMs = 2 * 60 * 1000;
 const maxFailedAttempts = 5;
 const blockMs = 60 * 1000;
+export const maxRoomParticipants = 6;
 
 export const creatorCookieName = (roomId: string) => `jec_creator_${roomId}`;
 
@@ -112,12 +115,16 @@ function cleanupRooms() {
         break;
       }
 
+      if (room.activeScreenShareParticipantId === participant.participantId) {
+        room.activeScreenShareParticipantId = undefined;
+      }
+
       room.participants.delete(participant.participantId);
     }
   }
 }
 
-export function createRoom(spokenLanguage: Language): Room {
+export function createRoom({ spokenLanguage }: { spokenLanguage: Language }): Room {
   rooms.clear();
 
   let roomId = generateRoomId();
@@ -130,6 +137,7 @@ export function createRoom(spokenLanguage: Language): Room {
     roomCode: generateUniqueRoomCode(),
     creatorSecret: crypto.randomBytes(24).toString("base64url"),
     createdAt: Date.now(),
+    maxParticipants: maxRoomParticipants,
     subtitleServiceStarted: false,
     participants: new Map(),
     failedAttempts: new Map()
@@ -266,7 +274,7 @@ export function joinRoom({
     }
   }
 
-  if (!alreadyJoined && room.participants.size >= 2) {
+  if (!alreadyJoined && room.participants.size >= room.maxParticipants) {
     return { ok: false, reason: "ROOM_FULL" };
   }
 
@@ -298,7 +306,7 @@ export function joinRoom({
   room.participants.set(participantId, participant);
 
   const otherParticipants = [...room.participants.values()].filter(
-    (item) => item.participantId !== participantId
+    (item) => item.participantId !== participantId && item.socketId
   );
 
   return {
@@ -335,6 +343,49 @@ export function stopSubtitleService(roomId: string, participantId: string) {
   return true;
 }
 
+export function startScreenShare(
+  roomId: string,
+  participantId: string,
+  streamId: unknown
+) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+  const normalizedStreamId = typeof streamId === "string" ? streamId : "";
+
+  if (!room || !participant || !normalizedStreamId) {
+    return { ok: false, reason: "INVALID_SESSION" as const };
+  }
+
+  if (
+    room.activeScreenShareParticipantId &&
+    room.activeScreenShareParticipantId !== participantId
+  ) {
+    return {
+      ok: false,
+      reason: "SCREEN_SHARE_ACTIVE" as const,
+      activeParticipantId: room.activeScreenShareParticipantId
+    };
+  }
+
+  room.activeScreenShareParticipantId = participantId;
+  return { ok: true as const, participant, streamId: normalizedStreamId };
+}
+
+export function stopScreenShare(roomId: string, participantId: string) {
+  const room = getRoom(roomId);
+  const participant = room?.participants.get(participantId);
+
+  if (!room || !participant) {
+    return { ok: false, reason: "INVALID_SESSION" as const };
+  }
+
+  if (room.activeScreenShareParticipantId === participantId) {
+    room.activeScreenShareParticipantId = undefined;
+  }
+
+  return { ok: true as const, participant };
+}
+
 export function leaveRoom(roomId: string, participantId: string) {
   const room = getRoom(roomId);
   if (!room) {
@@ -346,6 +397,10 @@ export function leaveRoom(roomId: string, participantId: string) {
   if (participant?.isHost) {
     rooms.delete(roomId);
     return { roomEnded: true, participant };
+  }
+
+  if (room.activeScreenShareParticipantId === participantId) {
+    room.activeScreenShareParticipantId = undefined;
   }
 
   room.participants.delete(participantId);
@@ -362,6 +417,11 @@ export function markParticipantDisconnected(roomId: string, participantId: strin
 
   participant.socketId = undefined;
   participant.lastSeenAt = Date.now();
+
+  if (room.activeScreenShareParticipantId === participantId) {
+    room.activeScreenShareParticipantId = undefined;
+  }
+
   return { roomEnded: false, participant };
 }
 
@@ -383,6 +443,10 @@ export function expireDisconnectedParticipant(
   if (participant.isHost) {
     rooms.delete(roomId);
     return { expired: true, roomEnded: true, participant };
+  }
+
+  if (room.activeScreenShareParticipantId === participantId) {
+    room.activeScreenShareParticipantId = undefined;
   }
 
   room.participants.delete(participantId);
@@ -416,4 +480,8 @@ export function findParticipantBySocket(socketId: string) {
   }
 
   return null;
+}
+
+export function resetRoomsForTests() {
+  rooms.clear();
 }

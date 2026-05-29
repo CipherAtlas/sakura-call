@@ -1,56 +1,78 @@
 "use client";
 
 import { Flower2, Leaf, Maximize2, ScreenShare } from "lucide-react";
-import type { KeyboardEvent, RefObject } from "react";
+import type { KeyboardEvent } from "react";
 import type { Language } from "@/lib/i18n";
 import { t } from "@/lib/i18n";
 
-export type MediaSurfaceId =
-  | "local-video"
-  | "remote-video"
-  | "local-screen"
-  | "remote-screen";
+export type MediaSurfaceId = string;
+export type MediaLayoutMode =
+  | "gallery"
+  | "focus"
+  | "speaker"
+  | "collage"
+  | "compact";
 export type MediaSurfaceSlot = "dominant" | "small";
 
-type ParticipantSurface = {
-  hasVideo: boolean;
-  id: Extract<MediaSurfaceId, "local-video" | "remote-video">;
-  isAvailable: boolean;
-  isSpeaking: boolean;
-  kind: "participant";
+export type MediaSurface = {
+  hasVideo?: boolean;
+  id: MediaSurfaceId;
+  isLocal?: boolean;
+  isSpeaking?: boolean;
+  kind: "participant" | "screen";
   label: string;
-  status: string;
-  variant: "local" | "remote";
-  videoRef: RefObject<HTMLVideoElement | null>;
+  status?: string;
+  stream: MediaStream | null;
 };
 
-type ScreenSurface = {
-  id: Extract<MediaSurfaceId, "local-screen" | "remote-screen">;
-  isAvailable: boolean;
-  kind: "screen";
-  label: string;
-  videoRef: RefObject<HTMLVideoElement | null>;
-};
+function attachStreamToVideo(video: HTMLVideoElement | null, stream: MediaStream | null) {
+  if (!video) {
+    return;
+  }
 
-type MediaSurface = ParticipantSurface | ScreenSurface;
+  video.onloadedmetadata = null;
+  video.oncanplay = null;
+
+  if (video.srcObject !== stream) {
+    video.srcObject = stream;
+  }
+
+  if (stream) {
+    const playVideo = () => {
+      void video.play().catch(() => undefined);
+    };
+
+    video.onloadedmetadata = playVideo;
+    video.oncanplay = playVideo;
+    playVideo();
+  }
+}
+
+function hasLiveVideoTrack(stream: MediaStream | null) {
+  return (
+    stream?.getVideoTracks().some((track) => track.readyState === "live") ??
+    false
+  );
+}
 
 function renderParticipantSurface(
-  surface: ParticipantSurface,
-  slot: MediaSurfaceSlot,
+  surface: MediaSurface,
+  slot: MediaSurfaceSlot | "tile",
   {
     fullscreenLabel,
     onFullscreenSurface,
-    onSelectSlot,
+    onSelectSurface,
     selectLabel,
   }: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSlot?: (slot: MediaSurfaceSlot) => void;
+    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
     selectLabel: string;
   },
 ) {
-  const Icon = surface.variant === "local" ? Flower2 : Leaf;
-  const handleSelect = () => onSelectSlot?.(slot);
+  const Icon = surface.isLocal ? Flower2 : Leaf;
+  const hasVideo = Boolean(surface.hasVideo || hasLiveVideoTrack(surface.stream));
+  const handleSelect = () => onSelectSurface?.(surface.id);
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -62,7 +84,7 @@ function renderParticipantSurface(
     <article
       aria-label={selectLabel}
       className={`media-surface participant-surface is-${slot} ${
-        surface.hasVideo ? "has-video" : "has-no-video"
+        hasVideo ? "has-video" : "has-no-video"
       } ${surface.isSpeaking ? "is-speaking" : ""}`}
       onClick={handleSelect}
       onKeyDown={handleKeyDown}
@@ -74,11 +96,11 @@ function renderParticipantSurface(
           surface.isSpeaking ? "is-speaking" : ""
         }`}
       >
-        {surface.hasVideo ? (
+        {hasVideo && surface.stream ? (
           <video
-            ref={surface.videoRef}
+            ref={(element) => attachStreamToVideo(element, surface.stream)}
             autoPlay
-            muted={surface.variant === "local"}
+            muted={surface.isLocal}
             playsInline
             className="media-video"
           />
@@ -116,21 +138,21 @@ function renderParticipantSurface(
 }
 
 function renderScreenSurface(
-  surface: ScreenSurface,
+  surface: MediaSurface,
   slot: MediaSurfaceSlot,
   {
     fullscreenLabel,
     onFullscreenSurface,
-    onSelectSlot,
+    onSelectSurface,
     selectLabel,
   }: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSlot?: (slot: MediaSurfaceSlot) => void;
+    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
     selectLabel: string;
   },
 ) {
-  const handleSelect = () => onSelectSlot?.(slot);
+  const handleSelect = () => onSelectSurface?.(surface.id);
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -148,9 +170,9 @@ function renderScreenSurface(
       tabIndex={0}
     >
       <video
-        ref={surface.videoRef}
+        ref={(element) => attachStreamToVideo(element, surface.stream)}
         autoPlay
-        muted
+        muted={surface.isLocal}
         playsInline
         className="media-video screen-share-video"
       />
@@ -177,136 +199,142 @@ function renderScreenSurface(
 
 function renderSurface(
   surface: MediaSurface,
-  slot: MediaSurfaceSlot,
+  slot: MediaSurfaceSlot | "tile",
   actions: {
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSlot?: (slot: MediaSurfaceSlot) => void;
+    onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
     selectLabel: string;
   },
 ) {
-  return surface.kind === "participant"
-    ? renderParticipantSurface(surface, slot, actions)
-    : renderScreenSurface(surface, slot, actions);
+  return surface.kind === "screen"
+    ? renderScreenSurface(surface, slot === "tile" ? "dominant" : slot, actions)
+    : renderParticipantSurface(surface, slot, actions);
 }
 
 export function VideoGrid({
-  language,
-  localVideoRef,
-  remoteVideoRef,
-  localScreenRef,
-  remoteScreenRef,
-  hasLocalVideo,
-  hasRemoteVideo,
-  hasLocalScreenShare,
-  hasRemoteScreenShare,
-  isLocalSpeaking,
-  isRemoteSpeaking,
-  localName,
   dominantSurfaceId,
-  smallSurfaceId,
-  hasRemoteParticipant,
+  layoutMode,
+  language,
   onFullscreenSurface,
-  onSelectSlot,
-  remoteName,
-  remoteStatus,
+  onSelectSurface,
+  surfaces,
 }: {
-  language: Language;
-  localVideoRef: RefObject<HTMLVideoElement | null>;
-  remoteVideoRef: RefObject<HTMLVideoElement | null>;
-  localScreenRef: RefObject<HTMLVideoElement | null>;
-  remoteScreenRef: RefObject<HTMLVideoElement | null>;
-  hasLocalVideo: boolean;
-  hasRemoteVideo: boolean;
-  hasLocalScreenShare: boolean;
-  hasRemoteScreenShare: boolean;
-  isLocalSpeaking: boolean;
-  isRemoteSpeaking: boolean;
-  localName: string;
   dominantSurfaceId: MediaSurfaceId | null;
-  smallSurfaceId: MediaSurfaceId | null;
-  hasRemoteParticipant: boolean;
+  layoutMode: MediaLayoutMode;
+  language: Language;
   onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-  onSelectSlot?: (slot: MediaSurfaceSlot) => void;
-  remoteName: string;
-  remoteStatus: string;
+  onSelectSurface?: (surfaceId: MediaSurfaceId) => void;
+  surfaces: MediaSurface[];
 }) {
-  const surfaces: MediaSurface[] = [
-    {
-      id: "remote-screen",
-      isAvailable: hasRemoteScreenShare,
-      kind: "screen",
-      label: t(language, "remoteScreen"),
-      videoRef: remoteScreenRef,
-    },
-    {
-      id: "local-screen",
-      isAvailable: hasLocalScreenShare,
-      kind: "screen",
-      label: t(language, "localScreen"),
-      videoRef: localScreenRef,
-    },
-    {
-      hasVideo: hasRemoteVideo,
-      id: "remote-video",
-      isAvailable: hasRemoteParticipant,
-      isSpeaking: isRemoteSpeaking,
-      kind: "participant",
-      label: remoteName,
-      status: remoteStatus,
-      variant: "remote",
-      videoRef: remoteVideoRef,
-    },
-    {
-      hasVideo: hasLocalVideo,
-      id: "local-video",
-      isAvailable: true,
-      isSpeaking: isLocalSpeaking,
-      kind: "participant",
-      label: localName,
-      status: "",
-      variant: "local",
-      videoRef: localVideoRef,
-    },
-  ];
-  const availableSurfaces = surfaces.filter((surface) => surface.isAvailable);
-  const dominantSurface =
-    availableSurfaces.find((surface) => surface.id === dominantSurfaceId) ??
-    availableSurfaces[0] ??
-    null;
-  const smallSurface =
-    smallSurfaceId === null
-      ? null
-      : availableSurfaces.find(
-          (surface) =>
-            surface.id === smallSurfaceId && surface.id !== dominantSurface?.id,
-        ) ?? null;
+  const availableSurfaces = surfaces.filter((surface) => surface.stream || surface.kind === "participant");
+  const screenSurface = availableSurfaces.find((surface) => surface.kind === "screen");
+  const participantSurfaces = availableSurfaces.filter(
+    (surface) => surface.kind === "participant",
+  );
+  const selectedSurface = participantSurfaces.find(
+    (surface) => surface.id === dominantSurfaceId,
+  );
+  const speakingSurface = participantSurfaces.find((surface) => surface.isSpeaking);
+  const effectiveLayoutMode =
+    participantSurfaces.length > 1 ? layoutMode : "gallery";
+  const preferredParticipant =
+    effectiveLayoutMode === "speaker"
+      ? speakingSurface ?? selectedSurface ?? participantSurfaces[0] ?? null
+      : selectedSurface ?? speakingSurface ?? participantSurfaces[0] ?? null;
 
-  if (!dominantSurface) {
+  if (!screenSurface && participantSurfaces.length === 0) {
     return null;
   }
 
-  return (
-    <section className={`media-layout ${smallSurface ? "has-small-surface" : ""}`}>
-      <div className="media-dominant-slot">
-        {renderSurface(dominantSurface, "dominant", {
-          fullscreenLabel: t(language, "fullscreenSurface"),
-          onFullscreenSurface,
-          onSelectSlot,
-          selectLabel: t(language, "openDominantPicker"),
-        })}
-      </div>
-
-      {smallSurface ? (
-        <div className="media-small-slot">
-          {renderSurface(smallSurface, "small", {
+  if (screenSurface) {
+    return (
+      <section className="media-layout media-layout-group has-screen-share">
+        <div className="media-dominant-slot">
+          {renderSurface(screenSurface, "dominant", {
             fullscreenLabel: t(language, "fullscreenSurface"),
             onFullscreenSurface,
-            onSelectSlot,
-            selectLabel: t(language, "openSmallPicker"),
+            onSelectSurface,
+            selectLabel: t(language, "openDominantPicker"),
           })}
         </div>
-      ) : null}
+        <div className="media-gallery-strip" aria-label={t(language, "participants")}>
+          {participantSurfaces.map((surface) => (
+            <div className="media-gallery-tile" key={surface.id}>
+              {renderSurface(surface, "tile", {
+                fullscreenLabel: t(language, "fullscreenSurface"),
+                onFullscreenSurface,
+                onSelectSurface,
+                selectLabel: t(language, "openDominantPicker"),
+              })}
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (
+    (effectiveLayoutMode === "focus" || effectiveLayoutMode === "speaker") &&
+    preferredParticipant
+  ) {
+    const stripSurfaces = participantSurfaces.filter(
+      (surface) => surface.id !== preferredParticipant.id,
+    );
+
+    return (
+      <section
+        className={`media-layout media-layout-group has-focus media-layout-${effectiveLayoutMode}`}
+      >
+        <div className="media-dominant-slot">
+          {renderSurface(preferredParticipant, "dominant", {
+            fullscreenLabel: t(language, "fullscreenSurface"),
+            onFullscreenSurface,
+            onSelectSurface,
+            selectLabel: t(language, "openDominantPicker"),
+          })}
+        </div>
+        {stripSurfaces.length > 0 ? (
+          <div className="media-gallery-strip" aria-label={t(language, "participants")}>
+            {stripSurfaces.map((surface) => (
+              <div className="media-gallery-tile" key={surface.id}>
+                {renderSurface(surface, "tile", {
+                  fullscreenLabel: t(language, "fullscreenSurface"),
+                  onFullscreenSurface,
+                  onSelectSurface,
+                  selectLabel: t(language, "openDominantPicker"),
+                })}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className={`media-layout media-layout-group is-gallery-only media-layout-${effectiveLayoutMode}`}
+    >
+      <div className="media-gallery-grid" aria-label={t(language, "participants")}>
+        {participantSurfaces.map((surface) => (
+          <div
+            className={`media-gallery-tile ${
+              effectiveLayoutMode === "collage" && surface.id === preferredParticipant?.id
+                ? "is-featured"
+                : ""
+            }`}
+            key={surface.id}
+          >
+            {renderSurface(surface, "tile", {
+              fullscreenLabel: t(language, "fullscreenSurface"),
+              onFullscreenSurface,
+              onSelectSurface,
+              selectLabel: t(language, "openDominantPicker"),
+            })}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

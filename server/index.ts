@@ -14,6 +14,7 @@ import {
   getRoomByCode,
   isCreatorSecret,
   isRoomParticipantSession,
+  maxRoomParticipants,
   roomExists
 } from "./rooms";
 import {
@@ -36,6 +37,7 @@ const handle = app.getRequestHandler();
 const publicHostname = process.env.CLOUDFLARE_HOSTNAME || "call.sabarg.com";
 const hstsHeaderValue = "max-age=31536000; includeSubDomains";
 const ownerCookieName = "jec_owner";
+const shutdownNoticeGraceMs = Number(process.env.SHUTDOWN_NOTICE_GRACE_MS || 750);
 const ownerAccessToken =
   process.env.ROOM_OWNER_TOKEN || process.env.CLOUDFLARE_CALL_API_TOKEN || "";
 const ownerSessionSecret =
@@ -206,6 +208,27 @@ function sendJson(
     ...headers
   });
   response.end(JSON.stringify(body));
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function closeHttpServer() {
+  return new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, 2_000);
+    timeout.unref();
+
+    httpServer.close((error) => {
+      clearTimeout(timeout);
+      if (error) {
+        console.error("HTTP server close failed:", error);
+      }
+      resolve();
+    });
+  });
 }
 
 function shouldUseSecureCookie(request: IncomingMessage) {
@@ -422,7 +445,9 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       return true;
     }
 
-    const room = createRoom(body.spokenLanguage);
+    const room = createRoom({
+      spokenLanguage: body.spokenLanguage
+    });
     const cookie = `${creatorCookieName(room.roomId)}=${encodeURIComponent(
       room.creatorSecret
     )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 4}${
@@ -434,7 +459,8 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       200,
       {
         roomId: room.roomId,
-        roomCode: room.roomCode
+        roomCode: room.roomCode,
+        maxParticipants: room.maxParticipants
       },
       {
         "set-cookie": cookie
@@ -476,7 +502,7 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       return true;
     }
 
-    if (room.participants.size >= 2) {
+    if (room.participants.size >= room.maxParticipants) {
       sendJson(response, 409, { error: "room-full" });
       return true;
     }
@@ -503,8 +529,10 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       roomId,
       exists: true,
       isCreator,
+      maxParticipants: room?.maxParticipants ?? maxRoomParticipants,
       participantCount: room?.participants.size ?? 0,
       subtitleServiceStarted: room?.subtitleServiceStarted ?? false,
+      activeScreenShareParticipantId: room?.activeScreenShareParticipantId,
       roomCode: isCreator ? room?.roomCode : undefined
     });
     return true;
@@ -544,16 +572,46 @@ const httpServer = createServer((request, response) => {
   })();
 });
 
-createSignalingServer(httpServer);
+const io = createSignalingServer(httpServer);
 
 httpServer.listen(port, () => {
   console.log(`Ready on http://${hostname}:${port}`);
 });
 
+let isShuttingDown = false;
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    void stopTurnRelayOnExit().finally(() => {
-      process.exit(0);
-    });
+    if (isShuttingDown) {
+      return;
+    }
+
+    isShuttingDown = true;
+    console.log(`Received ${signal}; notifying clients and shutting down.`);
+
+    void (async () => {
+      io.emit("room:ended", {
+        endedBy: "server-shutdown",
+        reason: "server-shutdown",
+        timestamp: Date.now()
+      });
+      io.emit("server:shutdown", {
+        reason: "server-shutdown",
+        timestamp: Date.now()
+      });
+      await sleep(Math.max(0, shutdownNoticeGraceMs));
+      io.disconnectSockets(true);
+      await new Promise<void>((resolve) => {
+        io.close(() => resolve());
+      });
+      await closeHttpServer();
+      await stopTurnRelayOnExit();
+    })()
+      .catch((error) => {
+        console.error("Shutdown failed:", error);
+      })
+      .finally(() => {
+        process.exit(0);
+      });
   });
 }

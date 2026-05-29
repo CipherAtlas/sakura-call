@@ -93,7 +93,7 @@ export function UsernameGate({
               <span aria-hidden="true" />
               <Flower2 className="h-4 w-4" aria-hidden="true" />
               <span aria-hidden="true" />
-              <p>Private two-person calls</p>
+              <p>Private room calls</p>
             </footer>
           </div>
 

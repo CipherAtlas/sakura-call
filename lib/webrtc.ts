@@ -92,5 +92,10 @@ export function closePeerConnection(peerConnection: RTCPeerConnection | null) {
     return;
   }
 
+  peerConnection.onconnectionstatechange = null;
+  peerConnection.onicecandidate = null;
+  peerConnection.onsignalingstatechange = null;
+  peerConnection.ontrack = null;
+
   peerConnection.close();
 }
