@@ -115,21 +115,16 @@ type JoinFailureReason = Extract<JoinResponse, { ok: false }>["reason"];
 
 type TurnPhase =
   | "disabled"
-  | "idle"
-  | "checking"
-  | "starting-vm"
-  | "waiting-vm"
-  | "waiting-ssh"
-  | "starting-turn"
   | "ready"
-  | "stopping"
   | "error";
 
 type TurnStatus = {
   phase: TurnPhase;
   progress: number;
   message: string;
+  provider?: string;
   host?: string;
+  expiresAt?: number;
   updatedAt: number;
 };
 
@@ -194,6 +189,14 @@ type ScreenShareQualitySettings = {
   prioritizeScreen: boolean;
 };
 type ScreenShareConnectionPath = "direct" | "relay" | "unknown";
+type ConnectionPathSummary = ScreenShareConnectionPath | "mixed";
+type PeerConnectionPathSnapshot = {
+  displayName: string;
+  participantId: string;
+  path: ScreenShareConnectionPath;
+  roundTripMs?: number;
+  updatedAt: number;
+};
 type ScreenShareStatsSnapshot = {
   width?: number;
   height?: number;
@@ -475,17 +478,6 @@ function appendCaptionLog(log: CaptionEvent[], caption: CaptionEvent) {
   ].slice(-captionLogLimit);
 }
 
-function isTurnBusy(phase: TurnPhase | undefined) {
-  return (
-    phase === "checking" ||
-    phase === "starting-vm" ||
-    phase === "waiting-vm" ||
-    phase === "waiting-ssh" ||
-    phase === "starting-turn" ||
-    phase === "stopping"
-  );
-}
-
 function attachStreamToVideo(video: HTMLVideoElement | null, stream: MediaStream | null) {
   if (!video) {
     return;
@@ -530,20 +522,8 @@ function turnStatusLabel(language: Language, status: TurnStatus | null) {
   switch (status?.phase) {
     case "disabled":
       return t(language, "turnRelayNotConfigured");
-    case "checking":
-      return t(language, "turnRelayChecking");
-    case "starting-vm":
-      return t(language, "turnRelayStartingVm");
-    case "waiting-vm":
-      return t(language, "turnRelayWaitingVm");
-    case "waiting-ssh":
-      return t(language, "turnRelayWaitingNetwork");
-    case "starting-turn":
-      return t(language, "turnRelayStarting");
     case "ready":
       return t(language, "turnRelayReady");
-    case "stopping":
-      return t(language, "turnRelayStopping");
     case "error":
       return t(language, "turnRelayError");
     default:
@@ -689,6 +669,47 @@ function getSelectedConnectionPath(stats: RTCStatsReport): {
     path: localType === "relay" || remoteType === "relay" ? "relay" : "direct",
     roundTripMs: roundTrip ? Math.round(roundTrip * 1000) : undefined,
   };
+}
+
+function summarizeConnectionPath(
+  snapshots: PeerConnectionPathSnapshot[],
+  expectedPeerCount: number,
+): ConnectionPathSummary {
+  if (expectedPeerCount === 0 || snapshots.length === 0) {
+    return "unknown";
+  }
+
+  const paths = snapshots.map((snapshot) => snapshot.path);
+  const hasRelay = paths.includes("relay");
+  const hasDirect = paths.includes("direct");
+  const hasUnknown = paths.includes("unknown");
+
+  if (hasRelay && (hasDirect || hasUnknown || snapshots.length < expectedPeerCount)) {
+    return "mixed";
+  }
+
+  if (hasRelay) {
+    return "relay";
+  }
+
+  if (!hasUnknown && paths.length === expectedPeerCount) {
+    return "direct";
+  }
+
+  return "unknown";
+}
+
+function connectionPathLabel(language: Language, path: ConnectionPathSummary) {
+  switch (path) {
+    case "direct":
+      return t(language, "connectionPathDirect");
+    case "relay":
+      return t(language, "connectionPathRelay");
+    case "mixed":
+      return t(language, "connectionPathMixed");
+    case "unknown":
+      return t(language, "connectionPathUnknown");
+  }
 }
 
 function screenSharePresetLabel(language: Language, presetId: ScreenSharePresetId) {
@@ -859,7 +880,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const remoteVideoTrackStreamIdsRef = useRef<Map<string, Map<string, string>>>(
     new Map(),
   );
-  const lastTurnReadyAtRef = useRef(0);
   const screenShareStatsSampleRef = useRef<{
     bytesSent: number;
     timestamp: number;
@@ -877,6 +897,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showScreenShareSettings, setShowScreenShareSettings] = useState(false);
   const [showLayoutPicker, setShowLayoutPicker] = useState(false);
+  const [isConversationVisible, setIsConversationVisible] = useState(true);
   const [surfacePickerTarget, setSurfacePickerTarget] =
     useState<SurfacePickerTarget | null>(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -903,6 +924,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [isApplyingScreenQuality, setIsApplyingScreenQuality] = useState(false);
   const [screenShareStats, setScreenShareStats] =
     useState<ScreenShareStatsSnapshot | null>(null);
+  const [connectionPathSnapshots, setConnectionPathSnapshots] = useState<
+    Record<string, PeerConnectionPathSnapshot>
+  >({});
   const [activeScreenShareParticipantId, setActiveScreenShareParticipantId] =
     useState("");
   const [remoteParticipants, setRemoteParticipants] = useState<
@@ -928,7 +952,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
     );
   const [subtitleNoticeId, setSubtitleNoticeId] = useState(0);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
-  const [isTurnActionPending, setIsTurnActionPending] = useState(false);
 
   const remoteParticipantsRef = useRef(remoteParticipants);
 
@@ -948,9 +971,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const maxParticipants = roomInfo?.maxParticipants ?? 6;
   const hostRoomCode = roomInfo?.isCreator ? roomInfo.roomCode : undefined;
   const canManageTurnRelay = Boolean(roomInfo?.isCreator || isRoomHost);
-  const turnRelayBusy = isTurnBusy(turnStatus?.phase);
   const turnRelayReady = turnStatus?.phase === "ready";
-  const turnRelayProgress = Math.max(0, Math.min(100, turnStatus?.progress ?? 0));
 
   const showSubtitleServiceBanner = useCallback(
     (
@@ -1836,6 +1857,65 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [isScreenSharing]);
 
   useEffect(() => {
+    if (callState === "idle" || remoteList.length === 0) {
+      setConnectionPathSnapshots({});
+      return;
+    }
+
+    let isActive = true;
+
+    async function updateConnectionPathSnapshots() {
+      const participants = Object.values(remoteParticipantsRef.current).sort(
+        (first, second) => first.joinedAt - second.joinedAt,
+      );
+      const updatedAt = Date.now();
+      const entries = await Promise.all(
+        participants.map(async (participant) => {
+          const peerState = peerConnectionsRef.current.get(
+            participant.participantId,
+          );
+          const selectedPath = peerState
+            ? await peerState.peerConnection
+                .getStats()
+                .then(getSelectedConnectionPath)
+                .catch(() => ({
+                  path: "unknown" as const,
+                  roundTripMs: undefined,
+                }))
+            : { path: "unknown" as const, roundTripMs: undefined };
+
+          return [
+            participant.participantId,
+            {
+              displayName: participant.displayName,
+              participantId: participant.participantId,
+              path: selectedPath.path,
+              roundTripMs: selectedPath.roundTripMs,
+              updatedAt,
+            },
+          ] as const;
+        }),
+      );
+
+      if (!isActive) {
+        return;
+      }
+
+      setConnectionPathSnapshots(Object.fromEntries(entries));
+    }
+
+    void updateConnectionPathSnapshots();
+    const interval = window.setInterval(() => {
+      void updateConnectionPathSnapshots();
+    }, 2000);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [callState, remoteList.length]);
+
+  useEffect(() => {
     if (!showSubtitleNotice) {
       return;
     }
@@ -1859,96 +1939,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return nextStatus;
   }, []);
 
-  const handleStartTurnRelay = useCallback(async () => {
-    setIsTurnActionPending(true);
-
-    try {
-      const response = await fetch("/api/turn/start", {
-        method: "POST",
-        credentials: "include",
-      });
-
-      if (response.ok) {
-        setTurnStatus((await response.json()) as TurnStatus);
-      } else {
-        setError(t(languageRef.current, "turnRelayUnavailable"));
-      }
-    } catch {
-      setError(t(languageRef.current, "turnRelayUnavailable"));
-    } finally {
-      setIsTurnActionPending(false);
-      void loadTurnStatus();
-    }
-  }, [loadTurnStatus]);
-
-  const handleStopTurnRelay = useCallback(async () => {
-    setIsTurnActionPending(true);
-
-    try {
-      const response = await fetch("/api/turn/stop", {
-        method: "POST",
-        credentials: "include",
-      });
-
-      if (response.ok) {
-        setTurnStatus((await response.json()) as TurnStatus);
-      } else {
-        setError(t(languageRef.current, "turnRelayUnavailable"));
-      }
-    } catch {
-      setError(t(languageRef.current, "turnRelayUnavailable"));
-    } finally {
-      setIsTurnActionPending(false);
-      void loadTurnStatus();
-    }
-  }, [loadTurnStatus]);
-
   useEffect(() => {
     if (!roomInfo?.isCreator && !isRoomHost) {
       setTurnStatus(null);
       return;
     }
 
-    let isActive = true;
-
-    async function pollTurnStatus() {
-      const nextStatus = await loadTurnStatus().catch(() => null);
-
-      if (!isActive || !nextStatus) {
-        return;
-      }
-
-      if (
-        nextStatus.phase === "ready" &&
-        nextStatus.updatedAt !== lastTurnReadyAtRef.current
-      ) {
-        lastTurnReadyAtRef.current = nextStatus.updatedAt;
-
-        if (callState !== "idle" && remoteList.length > 0) {
-          await createOffersForAllPeers({ iceRestart: true }).catch(() => undefined);
-        }
-      }
-    }
-
-    void pollTurnStatus();
-    const interval = window.setInterval(() => {
-      if (isTurnBusy(turnStatus?.phase)) {
-        void pollTurnStatus();
-      }
-    }, 2500);
-
-    return () => {
-      isActive = false;
-      window.clearInterval(interval);
-    };
+    void loadTurnStatus().catch(() => undefined);
   }, [
-    callState,
-    createOffersForAllPeers,
     isRoomHost,
     loadTurnStatus,
-    remoteList.length,
     roomInfo?.isCreator,
-    turnStatus?.phase,
   ]);
 
   useEffect(() => {
@@ -3437,8 +3438,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
       <button
         type="button"
-        aria-label={t(language, "showConversation")}
-        className="call-control-button is-active"
+        aria-label={
+          isConversationVisible
+            ? t(language, "hideConversation")
+            : t(language, "showConversation")
+        }
+        aria-pressed={isConversationVisible}
+        onClick={() => setIsConversationVisible((current) => !current)}
+        className={`call-control-button ${isConversationVisible ? "is-active" : ""}`}
       >
         <span className="call-control-icon" aria-hidden="true">
           <MessageSquare className="h-5 w-5" />
@@ -3462,6 +3469,72 @@ export function CallRoom({ roomId }: { roomId: string }) {
     </section>
   ) : null;
 
+  const connectionPathRows = remoteList.map((participant) => {
+    return (
+      connectionPathSnapshots[participant.participantId] ?? {
+        displayName: participant.displayName,
+        participantId: participant.participantId,
+        path: "unknown" as const,
+        updatedAt: 0,
+      }
+    );
+  });
+  const connectionPathSummary = summarizeConnectionPath(
+    connectionPathRows,
+    remoteList.length,
+  );
+
+  const connectionPathPanel = language ? (
+    <section className="settings-modal-section connection-path-panel">
+      <div className="flex items-start gap-3">
+        <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
+          <TowerControl className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="garden-text-ink text-base font-black">
+              {t(language, "connectionPathTitle")}
+            </h2>
+            <span className={`connection-path-pill is-${connectionPathSummary}`}>
+              {connectionPathLabel(language, connectionPathSummary)}
+            </span>
+          </div>
+          <p className="garden-muted mt-1 text-sm font-bold leading-snug">
+            {t(language, "connectionPathHelp")}
+          </p>
+
+          <div className="connection-path-list">
+            {connectionPathRows.length > 0 ? (
+              connectionPathRows.map((snapshot) => (
+                <div
+                  className="connection-path-row"
+                  key={snapshot.participantId}
+                >
+                  <span className="connection-path-peer">
+                    {snapshot.displayName}
+                  </span>
+                  <span className={`connection-path-pill is-${snapshot.path}`}>
+                    {connectionPathLabel(language, snapshot.path)}
+                  </span>
+                  {snapshot.roundTripMs !== undefined ? (
+                    <span className="connection-path-rtt">
+                      {t(language, "connectionPathRoundTrip")}{" "}
+                      {snapshot.roundTripMs} ms
+                    </span>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <p className="connection-path-empty">
+                {t(language, "connectionPathNoPeers")}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  ) : null;
+
   const turnRelayPanel = canManageTurnRelay && language ? (
     <section className="settings-modal-section turn-relay-panel">
       <div className="flex items-start gap-3">
@@ -3475,7 +3548,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </h2>
             <span
               className={`turn-relay-pill ${
-                turnRelayReady ? "is-ready" : turnRelayBusy ? "is-busy" : ""
+                turnRelayReady ? "is-ready" : turnStatus?.phase === "error" ? "is-error" : ""
               }`}
             >
               {turnStatusLabel(language, turnStatus)}
@@ -3486,46 +3559,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
               ? t(language, "turnRelayReadyHelp")
               : t(language, "turnRelayHelp")}
           </p>
-          <div
-            className="turn-relay-progress mt-3"
-            aria-label={t(language, "turnRelayProgress")}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={turnRelayProgress}
-            role="progressbar"
-          >
-            <span style={{ width: `${turnRelayProgress}%` }} />
-          </div>
-          {turnStatus?.host ? (
+          {turnStatus?.provider ? (
             <p className="garden-muted mt-2 truncate text-xs font-black">
+              {turnStatus.provider}
+            </p>
+          ) : null}
+          {turnStatus?.host ? (
+            <p className="garden-muted mt-1 truncate text-xs font-black">
               {turnStatus.host}
             </p>
           ) : null}
         </div>
-      </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => void handleStartTurnRelay()}
-          disabled={
-            turnRelayReady ||
-            turnRelayBusy ||
-            isTurnActionPending ||
-            turnStatus?.phase === "disabled"
-          }
-          className="garden-button garden-button-secondary h-12 gap-2 px-4 text-base"
-        >
-          <TowerControl className="h-5 w-5" aria-hidden="true" />
-          {t(language, "startTurnRelay")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleStopTurnRelay()}
-          disabled={!turnRelayReady || turnRelayBusy || isTurnActionPending}
-          className="garden-button garden-button-quiet h-12 px-4 text-base"
-        >
-          {t(language, "stopTurnRelay")}
-        </button>
       </div>
     </section>
   ) : null;
@@ -3548,6 +3592,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
     <main
       className={`sakura-home call-room-scene garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8 ${
         callState === "idle" ? "" : "call-scene-active"
+      } ${
+        callState !== "idle" && !isConversationVisible
+          ? "is-conversation-hidden"
+          : ""
       }`}
     >
       {remoteList.map((participant) => (
@@ -3809,7 +3857,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
             </>
           ) : (
             <>
-              <div className="active-call-workspace">
+              <div
+                className={`active-call-workspace ${
+                  isConversationVisible ? "" : "is-conversation-hidden"
+                }`}
+              >
                 <div className="active-media-column">
                   {fullscreenSurface ? null : (
                     <VideoGrid
@@ -3840,18 +3892,20 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   ) : null}
                 </div>
 
-                <ConversationPanel
-                  language={language}
-                  localCaptionLog={localCaptionLog}
-                  localFinalCaption={localFinalCaption}
-                  localName={displayName}
-                  localPartialCaption={localPartialCaption}
-                  remoteCaptionLog={remoteCaptionLog}
-                  remoteFinalCaption={null}
-                  remoteName={t(language, "participants")}
-                  remotePartialCaption={null}
-                  speakerNames={captionSpeakerNames}
-                />
+                {isConversationVisible ? (
+                  <ConversationPanel
+                    language={language}
+                    localCaptionLog={localCaptionLog}
+                    localFinalCaption={localFinalCaption}
+                    localName={displayName}
+                    localPartialCaption={localPartialCaption}
+                    remoteCaptionLog={remoteCaptionLog}
+                    remoteFinalCaption={null}
+                    remoteName={t(language, "participants")}
+                    remotePartialCaption={null}
+                    speakerNames={captionSpeakerNames}
+                  />
+                ) : null}
               </div>
 
               {activeControls}
@@ -4163,6 +4217,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 </p>
               </section>
 
+              {connectionPathPanel}
               {turnRelayPanel}
             </div>
           </section>

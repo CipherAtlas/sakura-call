@@ -1,437 +1,269 @@
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+const cloudflareTurnEndpointBase = "https://rtc.live.cloudflare.com/v1/turn/keys";
+const cloudflareTurnHost = "turn.cloudflare.com";
+const cloudflareTurnProvider = "Cloudflare Realtime TURN";
+const defaultCredentialTtlSeconds = 86_400;
+const browserBlockedPortPattern = /:53(?:[/?]|$)/;
 
-type TurnPhase =
-  | "disabled"
-  | "idle"
-  | "checking"
-  | "starting-vm"
-  | "waiting-vm"
-  | "waiting-ssh"
-  | "starting-turn"
-  | "ready"
-  | "stopping"
-  | "error";
+type TurnPhase = "disabled" | "ready" | "error";
 
 export type TurnStatus = {
   phase: TurnPhase;
   progress: number;
   message: string;
+  provider?: string;
   host?: string;
-  urls?: string[];
+  expiresAt?: number;
   updatedAt: number;
 };
 
-const sshOptions = [
-  "-o",
-  "StrictHostKeyChecking=accept-new",
-  "-o",
-  "BatchMode=yes",
-  "-o",
-  "ConnectTimeout=10",
-];
-
-let status: TurnStatus = {
-  phase: "idle",
-  progress: 0,
-  message: "TURN relay is off",
-  updatedAt: Date.now(),
+type CloudflareIceServerResponse = {
+  iceServers?: unknown;
 };
-let operation: Promise<TurnStatus> | null = null;
-let ociConfigFile = "";
-let turnHost = "";
-let turnUsername = "";
-let turnCredential = "";
-let startedByServer = false;
+
+type CredentialCacheEntry = {
+  expiresAt: number;
+  iceServers: RTCIceServer[];
+};
+
+const credentialCache = new Map<string, CredentialCacheEntry>();
+const pendingCredentials = new Map<string, Promise<CredentialCacheEntry>>();
+
+let statusUpdatedAt = Date.now();
+let lastError = "";
+let lastCredentialExpiresAt = 0;
 
 function envValue(key: string) {
   return process.env[key]?.trim() ?? "";
 }
 
-function envValueAny(...keys: string[]) {
-  for (const key of keys) {
-    const value = envValue(key);
-
-    if (value) {
-      return value;
-    }
-  }
-
-  return "";
+function cloudflareTurnKeyId() {
+  return (
+    envValue("CLOUDFLARE_TURN_TOKEN_ID") ||
+    envValue("CLOUDFLARE_TURN_KEY_ID") ||
+    envValue("TURN_TOKEN_ID") ||
+    envValue("TURN_KEY_ID")
+  );
 }
 
-function setStatus(next: Omit<TurnStatus, "updatedAt">) {
-  status = {
-    ...next,
-    updatedAt: Date.now(),
-  };
-  return status;
-}
-
-function randomSecret() {
-  return crypto.randomBytes(24).toString("base64url");
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+function cloudflareTurnKeyApiToken() {
+  return (
+    envValue("CLOUDFLARE_TURN_API_TOKEN") ||
+    envValue("CLOUDFLARE_TURN_KEY_API_TOKEN") ||
+    envValue("TURN_API_TOKEN") ||
+    envValue("TURN_KEY_API_TOKEN")
+  );
 }
 
 function isConfigured() {
-  return Boolean(
-    envValue("OCI_TURN_INSTANCE_ID") &&
-      envValue("OCI_TURN_SSH_USER") &&
-      envValue("OCI_TURN_SSH_KEY_FILE") &&
-      envValueAny("OCI_USER_OCID", "oci_user") &&
-      envValueAny("OCI_FINGERPRINT", "oci_fingerprint") &&
-      envValueAny("OCI_TENANCY_OCID", "oci_tenancy") &&
-      envValueAny("OCI_REGION", "oci_region") &&
-      envValueAny("OCI_PRIVATE_KEY_FILE", "oci_key_file"),
-  );
+  return Boolean(cloudflareTurnKeyId() && cloudflareTurnKeyApiToken());
 }
 
-async function run(command: string, args: string[]) {
-  const { stdout } = await execFileAsync(command, args, {
-    env: {
-      ...process.env,
-      OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING:
-        process.env.OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING ?? "True",
-      PYTHONWARNINGS:
-        process.env.PYTHONWARNINGS ?? "ignore::FutureWarning",
-    },
-    maxBuffer: 1024 * 1024,
-  });
+function credentialTtlSeconds() {
+  const value = Number(envValue("CLOUDFLARE_TURN_TTL_SECONDS"));
 
-  return stdout.trim();
+  if (Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+
+  return defaultCredentialTtlSeconds;
 }
 
-async function writeOciConfig() {
-  if (ociConfigFile) {
-    return ociConfigFile;
-  }
-
-  const configPath = path.join(
-    os.tmpdir(),
-    `sakura-turn-${process.pid}-${Date.now()}`,
-  );
-  const contents = [
-    "[DEFAULT]",
-    `user=${envValueAny("OCI_USER_OCID", "oci_user")}`,
-    `fingerprint=${envValueAny("OCI_FINGERPRINT", "oci_fingerprint")}`,
-    `tenancy=${envValueAny("OCI_TENANCY_OCID", "oci_tenancy")}`,
-    `region=${envValueAny("OCI_REGION", "oci_region")}`,
-    `key_file=${envValueAny("OCI_PRIVATE_KEY_FILE", "oci_key_file")}`,
-    "",
-  ].join("\n");
-
-  await fs.writeFile(configPath, contents, { mode: 0o600 });
-  ociConfigFile = configPath;
-  return configPath;
+function cacheRefreshBufferMs(ttlSeconds: number) {
+  return Math.min(5 * 60_000, Math.max(30_000, ttlSeconds * 1000 * 0.1));
 }
 
-async function getInstanceState(instanceId: string) {
-  return run("oci", [
-    "--config-file",
-    await writeOciConfig(),
-    "compute",
-    "instance",
-    "get",
-    "--instance-id",
-    instanceId,
-    "--query",
-    'data."lifecycle-state"',
-    "--raw-output",
-  ]);
+function credentialCacheKey(
+  roomId: string,
+  participantId: string,
+  participantSessionToken: string,
+) {
+  const sessionHash = crypto
+    .createHash("sha256")
+    .update(participantSessionToken)
+    .digest("base64url");
+
+  return `${roomId}:${participantId}:${sessionHash}`;
 }
 
-async function waitForInstance(instanceId: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const state = await getInstanceState(instanceId);
+function normalizeIceUrls(value: unknown) {
+  const urls = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
 
-    if (state === "RUNNING") {
-      return;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  throw new Error("Timed out waiting for OCI TURN VM to start");
+  return urls
+    .filter((url): url is string => typeof url === "string")
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .filter((url) => !browserBlockedPortPattern.test(url));
 }
 
-async function getInstancePublicIp(instanceId: string) {
-  const configFile = await writeOciConfig();
-  const vnicId = await run("oci", [
-    "--config-file",
-    configFile,
-    "compute",
-    "instance",
-    "list-vnics",
-    "--instance-id",
-    instanceId,
-    "--query",
-    "data[0].id",
-    "--raw-output",
-  ]);
-
-  return run("oci", [
-    "--config-file",
-    configFile,
-    "network",
-    "vnic",
-    "get",
-    "--vnic-id",
-    vnicId,
-    "--query",
-    'data."public-ip"',
-    "--raw-output",
-  ]);
-}
-
-async function waitForSsh(sshUser: string, sshKey: string, host: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    try {
-      await run("ssh", ["-i", sshKey, ...sshOptions, `${sshUser}@${host}`, "true"]);
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-  }
-
-  throw new Error("Timed out waiting for SSH on OCI TURN VM");
-}
-
-async function startTurn() {
-  if (!isConfigured()) {
-    return setStatus({
-      phase: "disabled",
-      progress: 0,
-      message: "TURN relay is not configured",
-    });
-  }
-
-  setStatus({
-    phase: "checking",
-    progress: 10,
-    message: "Checking TURN VM",
-  });
-
-  const instanceId = envValue("OCI_TURN_INSTANCE_ID");
-  const sshUser = envValue("OCI_TURN_SSH_USER");
-  const sshKey = envValue("OCI_TURN_SSH_KEY_FILE");
-  let state = await getInstanceState(instanceId);
-
-  if (state !== "RUNNING") {
-    setStatus({
-      phase: "starting-vm",
-      progress: 24,
-      message: "Starting TURN VM",
-    });
-    await run("oci", [
-      "--config-file",
-      await writeOciConfig(),
-      "compute",
-      "instance",
-      "action",
-      "--instance-id",
-      instanceId,
-      "--action",
-      "START",
-    ]);
-    setStatus({
-      phase: "waiting-vm",
-      progress: 42,
-      message: "Waiting for VM",
-    });
-    await waitForInstance(instanceId);
-    state = "RUNNING";
-  }
-
-  if (state !== "RUNNING") {
-    throw new Error(`TURN VM is ${state}`);
-  }
-
-  turnHost = await getInstancePublicIp(instanceId);
-  setStatus({
-    phase: "waiting-ssh",
-    progress: 64,
-    message: "Waiting for network",
-    host: turnHost,
-  });
-  await waitForSsh(sshUser, sshKey, turnHost);
-
-  turnUsername =
-    envValue("TURN_USERNAME") || envValue("NEXT_PUBLIC_TURN_USERNAME") || "sakura";
-  turnCredential =
-    envValue("TURN_PASSWORD") || envValue("NEXT_PUBLIC_TURN_CREDENTIAL");
-
-  if (!turnCredential || turnCredential === "change-me") {
-    turnCredential = randomSecret();
-  }
-
-  setStatus({
-    phase: "starting-turn",
-    progress: 82,
-    message: "Starting relay",
-    host: turnHost,
-  });
-
-  await run("ssh", [
-    "-i",
-    sshKey,
-    ...sshOptions,
-    `${sshUser}@${turnHost}`,
-    [
-      "sudo",
-      "env",
-      `TURN_USERNAME=${shellQuote(turnUsername)}`,
-      `TURN_PASSWORD=${shellQuote(turnCredential)}`,
-      "/opt/sakura-turn/start-turn.sh",
-      shellQuote(turnHost),
-    ].join(" "),
-  ]);
-
-  startedByServer = true;
-  return setStatus({
-    phase: "ready",
-    progress: 100,
-    message: "Relay ready",
-    host: turnHost,
-    urls: [
-      `turn:${turnHost}:3478?transport=udp`,
-      `turn:${turnHost}:3478?transport=tcp`,
-    ],
-  });
-}
-
-async function stopTurn() {
-  if (!startedByServer || !turnHost) {
-    return setStatus({
-      phase: "idle",
-      progress: 0,
-      message: "TURN relay is off",
-    });
-  }
-
-  setStatus({
-    phase: "stopping",
-    progress: 35,
-    message: "Stopping relay",
-    host: turnHost,
-  });
-
-  const sshUser = envValue("OCI_TURN_SSH_USER");
-  const sshKey = envValue("OCI_TURN_SSH_KEY_FILE");
-  await run("ssh", [
-    "-i",
-    sshKey,
-    ...sshOptions,
-    `${sshUser}@${turnHost}`,
-    "sudo /opt/sakura-turn/stop-turn.sh",
-  ]).catch(() => "");
-
-  if (envValue("OCI_TURN_STOP_INSTANCE_ON_EXIT") !== "0") {
-    setStatus({
-      phase: "stopping",
-      progress: 72,
-      message: "Stopping TURN VM",
-      host: turnHost,
-    });
-    await run("oci", [
-      "--config-file",
-      await writeOciConfig(),
-      "compute",
-      "instance",
-      "action",
-      "--instance-id",
-      envValue("OCI_TURN_INSTANCE_ID"),
-      "--action",
-      "STOP",
-    ]).catch(() => "");
-  }
-
-  startedByServer = false;
-  turnHost = "";
-  turnCredential = "";
-  return setStatus({
-    phase: "idle",
-    progress: 0,
-    message: "TURN relay is off",
-  });
-}
-
-export function getTurnStatus() {
-  if (!isConfigured() && status.phase === "idle") {
-    return {
-      ...status,
-      phase: "disabled" as const,
-      message: "TURN relay is not configured",
-    };
-  }
-
-  return status;
-}
-
-export function startTurnRelay() {
-  if (operation) {
-    return operation;
-  }
-
-  operation = startTurn()
-    .catch((error: unknown) =>
-      setStatus({
-        phase: "error",
-        progress: 0,
-        message: error instanceof Error ? error.message : "Could not start relay",
-        host: turnHost || undefined,
-      }),
-    )
-    .finally(() => {
-      operation = null;
-    });
-
-  return operation;
-}
-
-export function stopTurnRelay() {
-  if (operation) {
-    return operation;
-  }
-
-  operation = stopTurn()
-    .catch((error: unknown) =>
-      setStatus({
-        phase: "error",
-        progress: 0,
-        message: error instanceof Error ? error.message : "Could not stop relay",
-        host: turnHost || undefined,
-      }),
-    )
-    .finally(() => {
-      operation = null;
-    });
-
-  return operation;
-}
-
-export function getActiveTurnIceServer(): RTCIceServer | null {
-  if (status.phase !== "ready" || !status.urls || !turnUsername || !turnCredential) {
+function normalizeIceServer(value: unknown): RTCIceServer | null {
+  if (!value || typeof value !== "object") {
     return null;
   }
 
+  const record = value as Record<string, unknown>;
+  const urls = normalizeIceUrls(record.urls);
+
+  if (urls.length === 0) {
+    return null;
+  }
+
+  const iceServer: RTCIceServer = { urls };
+
+  if (typeof record.username === "string" && record.username) {
+    iceServer.username = record.username;
+  }
+
+  if (typeof record.credential === "string" && record.credential) {
+    iceServer.credential = record.credential;
+  }
+
+  return iceServer;
+}
+
+function normalizeIceServers(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => normalizeIceServer(item))
+    .filter((item): item is RTCIceServer => Boolean(item));
+}
+
+function hasTurnServer(iceServers: RTCIceServer[]) {
+  return iceServers.some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+
+    return urls.some((url) => /^turns?:/i.test(url));
+  });
+}
+
+function setReady(expiresAt: number) {
+  lastError = "";
+  lastCredentialExpiresAt = expiresAt;
+  statusUpdatedAt = Date.now();
+}
+
+function setError(error: unknown) {
+  lastError = error instanceof Error ? error.message : "Could not generate TURN credentials";
+  statusUpdatedAt = Date.now();
+}
+
+async function generateCloudflareIceServers(): Promise<CredentialCacheEntry> {
+  const keyId = cloudflareTurnKeyId();
+  const token = cloudflareTurnKeyApiToken();
+
+  if (!keyId || !token) {
+    throw new Error("Cloudflare TURN is not configured");
+  }
+
+  const ttl = credentialTtlSeconds();
+  const response = await fetch(
+    `${cloudflareTurnEndpointBase}/${encodeURIComponent(
+      keyId,
+    )}/credentials/generate-ice-servers`,
+    {
+      body: JSON.stringify({ ttl }),
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Cloudflare TURN credential request failed (${response.status})`);
+  }
+
+  const body = (await response.json()) as CloudflareIceServerResponse;
+  const iceServers = normalizeIceServers(body.iceServers);
+
+  if (!hasTurnServer(iceServers)) {
+    throw new Error("Cloudflare TURN response did not include a TURN server");
+  }
+
   return {
-    urls: status.urls,
-    username: turnUsername,
-    credential: turnCredential,
+    expiresAt: Date.now() + ttl * 1000,
+    iceServers,
   };
 }
 
-export async function stopTurnRelayOnExit() {
-  if (startedByServer) {
-    await stopTurn().catch(() => undefined);
+export async function getCloudflareTurnIceServers({
+  roomId,
+  participantId,
+  participantSessionToken,
+}: {
+  roomId: string;
+  participantId: string;
+  participantSessionToken: string;
+}) {
+  if (!isConfigured()) {
+    return null;
   }
+
+  const ttl = credentialTtlSeconds();
+  const key = credentialCacheKey(roomId, participantId, participantSessionToken);
+  const cached = credentialCache.get(key);
+
+  if (cached && cached.expiresAt - Date.now() > cacheRefreshBufferMs(ttl)) {
+    return cached.iceServers;
+  }
+
+  const pending = pendingCredentials.get(key);
+
+  if (pending) {
+    return (await pending).iceServers;
+  }
+
+  const nextCredential = generateCloudflareIceServers();
+  pendingCredentials.set(key, nextCredential);
+
+  try {
+    const credential = await nextCredential;
+    credentialCache.set(key, credential);
+    setReady(credential.expiresAt);
+    return credential.iceServers;
+  } catch (error) {
+    credentialCache.delete(key);
+    setError(error);
+    throw error;
+  } finally {
+    pendingCredentials.delete(key);
+  }
+}
+
+export function getTurnStatus(): TurnStatus {
+  if (!isConfigured()) {
+    return {
+      phase: "disabled",
+      progress: 0,
+      message: "Cloudflare TURN is not configured",
+      provider: cloudflareTurnProvider,
+      updatedAt: statusUpdatedAt,
+    };
+  }
+
+  if (lastError) {
+    return {
+      phase: "error",
+      progress: 0,
+      message: lastError,
+      provider: cloudflareTurnProvider,
+      host: cloudflareTurnHost,
+      updatedAt: statusUpdatedAt,
+    };
+  }
+
+  return {
+    phase: "ready",
+    progress: 100,
+    message: "Cloudflare TURN is configured",
+    provider: cloudflareTurnProvider,
+    host: cloudflareTurnHost,
+    expiresAt: lastCredentialExpiresAt || undefined,
+    updatedAt: statusUpdatedAt,
+  };
 }

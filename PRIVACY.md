@@ -21,7 +21,7 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 - Owner and room creator privileges use HTTP-only cookies.
 - The OpenAI API key stays server-side.
 - The meeting UI separates the media-encryption boundary from the optional captions/OpenAI processing boundary before captions are enabled.
-- The fallback TURN relay is intended to be started only when needed and stopped on exit.
+- Cloudflare Realtime TURN credentials are generated server-side only for authenticated room participants. Calls remain peer-to-peer first and use TURN only when ICE needs relay fallback.
 - The production dependency audit currently reports no vulnerabilities after updating the PostCSS dependency used by Next through npm overrides.
 
 ## Changes In The Current Hardening Pass
@@ -40,8 +40,8 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 
 - Keep the deployment private and owner-operated. Do not add public room discovery, user accounts, queues, public meeting features, or long-lived service operation without a broader security review.
 - Keep captions opt-in per browser. When captions are enabled, that browser's speech audio and transcript content leave the browser and are processed by the server and OpenAI.
-- Keep the TURN relay ephemeral and guarded. TURN should start only when needed, use non-default credentials, and stop when the call ends.
-- Keep `.env`, `.env.local`, OCI keys, Cloudflare tokens, OpenAI keys, TURN passwords, and SSH keys out of git.
+- Keep Cloudflare TURN keys server-side. Browsers should receive only short-lived generated ICE credentials through the authenticated `/api/ice-servers` route.
+- Keep `.env`, `.env.local`, Cloudflare tokens, OpenAI keys, and TURN key tokens out of git.
 
 ### P1: Should Do Before Presenting As A Serious Developer Tool
 
@@ -53,10 +53,10 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 ### P2: Could Do For Stricter Privacy Deployments
 
 - Add an optional deployment-controlled extra room secret while preserving the default 4-digit room code flow.
-- Add short-lived TURN credentials generated per room/session instead of any static browser-visible TURN credential.
+- Add TURN credential revocation for ended rooms if stricter relay cleanup is needed.
 - Add an admin health page that exposes only operational status, never room codes, participant names, captions, tokens, or ICE credentials.
 - Add automated dependency update checks in CI so audit drift is caught early.
-- Add an explicit data-retention statement in the UI and README for captions, server memory, browser storage, TURN metadata, Cloudflare Tunnel, OCI, and OpenAI processing.
+- Add an explicit data-retention statement in the UI and README for captions, server memory, browser storage, TURN metadata, Cloudflare Tunnel, Cloudflare Realtime TURN, and OpenAI processing.
 
 ## Honest Positioning
 

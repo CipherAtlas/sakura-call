@@ -245,6 +245,10 @@ export function VideoGrid({
   const participantSurfaces = availableSurfaces.filter(
     (surface) => surface.kind === "participant",
   );
+  const participantDensityClass =
+    participantSurfaces.length > 1
+      ? "has-multiple-participants"
+      : "is-single-participant";
   const selectedSurface = availableSurfaces.find(
     (surface) => surface.id === dominantSurfaceId,
   );
@@ -269,7 +273,9 @@ export function VideoGrid({
     );
 
     return (
-      <section className="media-layout media-layout-group has-screen-share">
+      <section
+        className={`media-layout media-layout-group has-screen-share ${participantDensityClass}`}
+      >
         <div className="media-dominant-slot">
           {renderSurface(dominantSharedSurface, "dominant", {
             fullscreenLabel: t(language, "fullscreenSurface"),
@@ -306,7 +312,7 @@ export function VideoGrid({
 
     return (
       <section
-        className={`media-layout media-layout-group has-focus media-layout-${effectiveLayoutMode}`}
+        className={`media-layout media-layout-group has-focus media-layout-${effectiveLayoutMode} ${participantDensityClass}`}
       >
         <div className="media-dominant-slot">
           {renderSurface(preferredParticipant, "dominant", {
@@ -336,7 +342,7 @@ export function VideoGrid({
 
   return (
     <section
-      className={`media-layout media-layout-group is-gallery-only media-layout-${effectiveLayoutMode}`}
+      className={`media-layout media-layout-group is-gallery-only media-layout-${effectiveLayoutMode} ${participantDensityClass}`}
     >
       <div className="media-gallery-grid" aria-label={t(language, "participants")}>
         {participantSurfaces.map((surface) => (

@@ -33,53 +33,25 @@ import { saveRoomCodeForRoom } from "@/lib/roomCode";
 
 type TurnPhase =
   | "disabled"
-  | "idle"
-  | "checking"
-  | "starting-vm"
-  | "waiting-vm"
-  | "waiting-ssh"
-  | "starting-turn"
   | "ready"
-  | "stopping"
   | "error";
 
 type TurnStatus = {
   phase: TurnPhase;
   progress: number;
   message: string;
+  provider?: string;
   host?: string;
+  expiresAt?: number;
   updatedAt: number;
 };
-
-function isTurnBusy(phase: TurnPhase | undefined) {
-  return (
-    phase === "checking" ||
-    phase === "starting-vm" ||
-    phase === "waiting-vm" ||
-    phase === "waiting-ssh" ||
-    phase === "starting-turn" ||
-    phase === "stopping"
-  );
-}
 
 function turnStatusLabel(language: Language, status: TurnStatus | null) {
   switch (status?.phase) {
     case "disabled":
       return t(language, "turnRelayNotConfigured");
-    case "checking":
-      return t(language, "turnRelayChecking");
-    case "starting-vm":
-      return t(language, "turnRelayStartingVm");
-    case "waiting-vm":
-      return t(language, "turnRelayWaitingVm");
-    case "waiting-ssh":
-      return t(language, "turnRelayWaitingNetwork");
-    case "starting-turn":
-      return t(language, "turnRelayStarting");
     case "ready":
       return t(language, "turnRelayReady");
-    case "stopping":
-      return t(language, "turnRelayStopping");
     case "error":
       return t(language, "turnRelayError");
     default:
@@ -104,7 +76,6 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState("");
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
-  const [isTurnActionPending, setIsTurnActionPending] = useState(false);
 
   useEffect(() => {
     setLanguage(getSavedLanguage());
@@ -191,76 +162,8 @@ export default function HomePage() {
       return;
     }
 
-    let isActive = true;
-
-    async function pollTurnStatus() {
-      const nextStatus = await loadTurnStatus().catch(() => null);
-
-      if (!isActive || !nextStatus) {
-        return;
-      }
-    }
-
-    void pollTurnStatus();
-    const interval = window.setInterval(() => {
-      if (isTurnBusy(turnStatus?.phase)) {
-        void pollTurnStatus();
-      }
-    }, 2500);
-
-    return () => {
-      isActive = false;
-      window.clearInterval(interval);
-    };
-  }, [isOwner, loadTurnStatus, turnStatus?.phase]);
-
-  async function handleStartTurnRelay() {
-    setIsTurnActionPending(true);
-
-    try {
-      const response = await fetch("/api/turn/start", {
-        method: "POST",
-        credentials: "include"
-      });
-
-      if (response.ok) {
-        setTurnStatus((await response.json()) as TurnStatus);
-      } else if (language) {
-        setError(t(language, "turnRelayUnavailable"));
-      }
-    } catch {
-      if (language) {
-        setError(t(language, "turnRelayUnavailable"));
-      }
-    } finally {
-      setIsTurnActionPending(false);
-      void loadTurnStatus();
-    }
-  }
-
-  async function handleStopTurnRelay() {
-    setIsTurnActionPending(true);
-
-    try {
-      const response = await fetch("/api/turn/stop", {
-        method: "POST",
-        credentials: "include"
-      });
-
-      if (response.ok) {
-        setTurnStatus((await response.json()) as TurnStatus);
-      } else if (language) {
-        setError(t(language, "turnRelayUnavailable"));
-      }
-    } catch {
-      if (language) {
-        setError(t(language, "turnRelayUnavailable"));
-      }
-    } finally {
-      setIsTurnActionPending(false);
-      void loadTurnStatus();
-    }
-  }
+    void loadTurnStatus().catch(() => undefined);
+  }, [isOwner, loadTurnStatus]);
 
   async function handleCreateRoom() {
     if (!language) {
@@ -474,12 +377,7 @@ export default function HomePage() {
     );
   }
 
-  const turnRelayBusy = isTurnBusy(turnStatus?.phase);
   const turnRelayReady = turnStatus?.phase === "ready";
-  const turnRelayProgress = Math.max(
-    0,
-    Math.min(100, turnStatus?.progress ?? 0)
-  );
   const createRoomLabel = t(language, "createRoom");
   const joinRoomLabel = t(language, "joinRoom");
   const homeFootnote = t(language, "homeFootnote");
@@ -496,7 +394,7 @@ export default function HomePage() {
             </h2>
             <span
               className={`turn-relay-pill ${
-                turnRelayReady ? "is-ready" : turnRelayBusy ? "is-busy" : ""
+                turnRelayReady ? "is-ready" : turnStatus?.phase === "error" ? "is-error" : ""
               }`}
             >
               {turnStatusLabel(language, turnStatus)}
@@ -507,46 +405,17 @@ export default function HomePage() {
               ? t(language, "turnRelayReadyHelp")
               : t(language, "turnRelayHelp")}
           </p>
-          <div
-            className="turn-relay-progress mt-3"
-            aria-label={t(language, "turnRelayProgress")}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={turnRelayProgress}
-            role="progressbar"
-          >
-            <span style={{ width: `${turnRelayProgress}%` }} />
-          </div>
-          {turnStatus?.host ? (
+          {turnStatus?.provider ? (
             <p className="garden-muted mt-2 truncate text-xs font-black">
+              {turnStatus.provider}
+            </p>
+          ) : null}
+          {turnStatus?.host ? (
+            <p className="garden-muted mt-1 truncate text-xs font-black">
               {turnStatus.host}
             </p>
           ) : null}
         </div>
-      </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => void handleStartTurnRelay()}
-          disabled={
-            turnRelayReady ||
-            turnRelayBusy ||
-            isTurnActionPending ||
-            turnStatus?.phase === "disabled"
-          }
-          className="garden-button garden-button-secondary h-12 gap-2 px-4 text-base"
-        >
-          <TowerControl className="h-5 w-5" aria-hidden="true" />
-          {t(language, "startTurnRelay")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleStopTurnRelay()}
-          disabled={!turnRelayReady || turnRelayBusy || isTurnActionPending}
-          className="garden-button garden-button-quiet h-12 px-4 text-base"
-        >
-          {t(language, "stopTurnRelay")}
-        </button>
       </div>
     </section>
   ) : null;

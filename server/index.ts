@@ -18,11 +18,8 @@ import {
   roomExists
 } from "./rooms";
 import {
-  getActiveTurnIceServer,
+  getCloudflareTurnIceServers,
   getTurnStatus,
-  startTurnRelay,
-  stopTurnRelay,
-  stopTurnRelayOnExit
 } from "./turn";
 
 const { loadEnvConfig } = nextEnv;
@@ -38,8 +35,7 @@ const publicHostname = process.env.CLOUDFLARE_HOSTNAME || "call.sabarg.com";
 const hstsHeaderValue = "max-age=31536000; includeSubDomains";
 const ownerCookieName = "jec_owner";
 const shutdownNoticeGraceMs = Number(process.env.SHUTDOWN_NOTICE_GRACE_MS || 750);
-const ownerAccessToken =
-  process.env.ROOM_OWNER_TOKEN || process.env.CLOUDFLARE_CALL_API_TOKEN || "";
+const ownerAccessToken = process.env.ROOM_OWNER_TOKEN || "";
 const ownerSessionSecret =
   process.env.ROOM_OWNER_SESSION_SECRET || ownerAccessToken;
 const ownerSessionMaxAge = 60 * 60 * 24 * 14;
@@ -248,34 +244,31 @@ function parseUrlList(value: string | undefined) {
     .filter(Boolean);
 }
 
-function configuredIceServers({ includeTurn = false } = {}) {
+async function configuredIceServers({
+  includeTurn = false,
+  roomId = "",
+  participantId = "",
+  participantSessionToken = "",
+} = {}) {
   const stunUrls = parseUrlList(process.env.NEXT_PUBLIC_STUN_URLS);
-  const turnUrls = parseUrlList(
-    process.env.TURN_URLS || process.env.NEXT_PUBLIC_TURN_URLS
-  );
-  const turnUsername =
-    process.env.TURN_USERNAME || process.env.NEXT_PUBLIC_TURN_USERNAME;
-  const turnCredential =
-    process.env.TURN_PASSWORD || process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
   const iceServers: RTCIceServer[] = [
     { urls: stunUrls && stunUrls.length > 0 ? stunUrls : defaultStunUrls }
   ];
-  const activeTurnIceServer = getActiveTurnIceServer();
 
-  if (includeTurn && activeTurnIceServer) {
-    iceServers.push(activeTurnIceServer);
-  } else if (
-    includeTurn &&
-    turnUrls &&
-    turnUrls.length > 0 &&
-    turnUsername &&
-    turnCredential
-  ) {
-    iceServers.push({
-      urls: turnUrls,
-      username: turnUsername,
-      credential: turnCredential
-    });
+  if (includeTurn && roomId && participantId && participantSessionToken) {
+    try {
+      const cloudflareIceServers = await getCloudflareTurnIceServers({
+        roomId,
+        participantId,
+        participantSessionToken,
+      });
+
+      if (cloudflareIceServers) {
+        return cloudflareIceServers;
+      }
+    } catch (error) {
+      console.error("Cloudflare TURN credential generation failed:", error);
+    }
   }
 
   return iceServers;
@@ -358,6 +351,10 @@ async function handleTurnApi(request: IncomingMessage, response: ServerResponse)
     const roomId = typeof body?.roomId === "string" ? body.roomId : "";
     const participantId =
       typeof body?.participantId === "string" ? body.participantId : "";
+    const participantSessionToken =
+      typeof body?.participantSessionToken === "string"
+        ? body.participantSessionToken
+        : "";
 
     if (
       !isRoomParticipantSession(
@@ -371,7 +368,12 @@ async function handleTurnApi(request: IncomingMessage, response: ServerResponse)
     }
 
     sendJson(response, 200, {
-      iceServers: configuredIceServers({ includeTurn: true }),
+      iceServers: await configuredIceServers({
+        includeTurn: true,
+        participantId,
+        participantSessionToken,
+        roomId,
+      }),
       iceTransportPolicy:
         process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY === "relay"
           ? "relay"
@@ -387,28 +389,6 @@ async function handleTurnApi(request: IncomingMessage, response: ServerResponse)
     }
 
     sendJson(response, 200, getTurnStatus());
-    return true;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/turn/start") {
-    if (!isOwnerRequest(request)) {
-      sendJson(response, 403, { error: "owner-required" });
-      return true;
-    }
-
-    void startTurnRelay();
-    sendJson(response, 202, getTurnStatus());
-    return true;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/turn/stop") {
-    if (!isOwnerRequest(request)) {
-      sendJson(response, 403, { error: "owner-required" });
-      return true;
-    }
-
-    void stopTurnRelay();
-    sendJson(response, 202, getTurnStatus());
     return true;
   }
 
@@ -605,7 +585,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         io.close(() => resolve());
       });
       await closeHttpServer();
-      await stopTurnRelayOnExit();
     })()
       .catch((error) => {
         console.error("Shutdown failed:", error);
