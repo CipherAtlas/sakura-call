@@ -238,18 +238,6 @@ Use `.env.local` for local secrets. `.env` also works locally, but populated env
 | `CLOUDFLARE_SERVICE_URL` | Local service URL for tunnel ingress, usually `http://localhost:3010`. |
 | `SHUTDOWN_NOTICE_GRACE_MS` | Optional delay before shutdown notification redirect. Defaults to `750`. |
 
-Do not use these old or unrelated values:
-
-- `CLOUDFLARE_CALL_API_TOKEN`
-- `TURN_USERNAME`
-- `TURN_PASSWORD`
-- `NEXT_PUBLIC_TURN_URLS`
-- `NEXT_PUBLIC_TURN_USERNAME`
-- `NEXT_PUBLIC_TURN_CREDENTIAL`
-- OCI or Oracle TURN VM variables
-
-The server still accepts a few old TURN aliases during transition, such as `TURN_TOKEN_ID` and `TURN_API_TOKEN`, but the documented names above are the canonical names.
-
 ## Cloudflare Tunnel Setup
 
 Use this when you want a real HTTPS URL for Safari, mobile devices, or a participant outside your local network.
