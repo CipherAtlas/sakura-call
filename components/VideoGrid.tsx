@@ -1,7 +1,7 @@
 "use client";
 
 import { Flower2, Leaf, Maximize2, ScreenShare } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import { memo, type KeyboardEvent } from "react";
 import type { Language } from "@/lib/i18n";
 import { t } from "@/lib/i18n";
 
@@ -222,7 +222,7 @@ function renderSurface(
     : renderParticipantSurface(surface, slot, actions);
 }
 
-export function VideoGrid({
+function VideoGridComponent({
   dominantSurfaceId,
   layoutMode,
   language,
@@ -366,3 +366,5 @@ export function VideoGrid({
     </section>
   );
 }
+
+export const VideoGrid = memo(VideoGridComponent);

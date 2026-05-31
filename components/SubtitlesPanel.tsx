@@ -1,7 +1,7 @@
 "use client";
 
 import { Captions, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Language } from "@/lib/i18n";
 import { languageLabel, t } from "@/lib/i18n";
 
@@ -28,16 +28,7 @@ function formatCaptionTime(timestamp: number) {
   }).format(new Date(timestamp));
 }
 
-export function SubtitlesPanel({
-  language,
-  partialCaption,
-  finalCaption,
-  title,
-  emptyText,
-  captionLog = [],
-  isPreview = false,
-  embedded = false
-}: {
+type SubtitlesPanelProps = {
   language: Language;
   partialCaption: CaptionEvent | null;
   finalCaption: CaptionEvent | null;
@@ -46,7 +37,18 @@ export function SubtitlesPanel({
   captionLog?: CaptionEvent[];
   isPreview?: boolean;
   embedded?: boolean;
-}) {
+};
+
+export const SubtitlesPanel = memo(function SubtitlesPanel({
+  language,
+  partialCaption,
+  finalCaption,
+  title,
+  emptyText,
+  captionLog = [],
+  isPreview = false,
+  embedded = false
+}: SubtitlesPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeCaption = partialCaption ?? finalCaption;
   const liveCaptions =
@@ -132,7 +134,7 @@ export function SubtitlesPanel({
       </div>
     </section>
   );
-}
+});
 
 function appendLiveCaption(
   captions: ConversationCaption[],
@@ -165,18 +167,7 @@ function captionLanguageLabel(language: CaptionEvent["originalLanguage"]) {
   return languageLabel(language);
 }
 
-export function ConversationPanel({
-  language,
-  localCaptionLog = [],
-  localFinalCaption,
-  localName,
-  localPartialCaption,
-  remoteCaptionLog = [],
-  remoteFinalCaption,
-  remoteName,
-  remotePartialCaption,
-  speakerNames = {},
-}: {
+type ConversationPanelProps = {
   language: Language;
   localCaptionLog?: CaptionEvent[];
   localFinalCaption: CaptionEvent | null;
@@ -187,7 +178,20 @@ export function ConversationPanel({
   remoteName: string;
   remotePartialCaption: CaptionEvent | null;
   speakerNames?: Record<string, string>;
-}) {
+};
+
+export const ConversationPanel = memo(function ConversationPanel({
+  language,
+  localCaptionLog = [],
+  localFinalCaption,
+  localName,
+  localPartialCaption,
+  remoteCaptionLog = [],
+  remoteFinalCaption,
+  remoteName,
+  remotePartialCaption,
+  speakerNames = {},
+}: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const [hasUnread, setHasUnread] = useState(false);
@@ -360,4 +364,4 @@ export function ConversationPanel({
       </div>
     </section>
   );
-}
+});

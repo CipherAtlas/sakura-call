@@ -6,8 +6,11 @@ import {
   KeyRound,
   Leaf,
   LogOut,
+  Monitor,
+  Moon,
   Settings,
   Sparkles,
+  Sun,
   TowerControl,
   X
 } from "lucide-react";
@@ -30,6 +33,13 @@ import {
   t
 } from "@/lib/i18n";
 import { saveRoomCodeForRoom } from "@/lib/roomCode";
+import {
+  applyTheme,
+  getSavedTheme,
+  saveTheme,
+  ThemeMode,
+  watchSystemTheme
+} from "@/lib/theme";
 
 type TurnPhase =
   | "disabled"
@@ -76,11 +86,17 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState("");
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => getSavedTheme());
 
   useEffect(() => {
     setLanguage(getSavedLanguage());
     setDisplayName(getSavedDisplayName());
   }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+    return watchSystemTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     let isActive = true;
@@ -361,6 +377,11 @@ export default function HomePage() {
     setError("");
   }
 
+  function handleThemeChange(nextTheme: ThemeMode) {
+    setTheme(nextTheme);
+    saveTheme(nextTheme);
+  }
+
   const effectiveHomeMode = isOwner ? homeMode : "join";
 
   if (!language) {
@@ -610,6 +631,39 @@ export default function HomePage() {
                     </option>
                   ))}
                 </select>
+              </section>
+
+              <section className="settings-modal-section theme-settings-panel">
+                <p className="garden-text-muted text-sm font-black">
+                  {t(language, "theme")}
+                </p>
+                <div className="theme-mode-toggle" role="group" aria-label={t(language, "theme")}>
+                  {(["system", "light", "dark"] as const).map((mode) => {
+                    const Icon =
+                      mode === "system" ? Monitor : mode === "dark" ? Moon : Sun;
+
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        aria-pressed={theme === mode}
+                        onClick={() => handleThemeChange(mode)}
+                        className={`theme-mode-button ${
+                          theme === mode ? "is-selected" : ""
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                        <span>
+                          {mode === "system"
+                            ? t(language, "themeSystem")
+                            : mode === "dark"
+                              ? t(language, "themeDark")
+                              : t(language, "themeLight")}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </section>
 
               <section className="settings-modal-section">

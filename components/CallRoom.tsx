@@ -5,24 +5,33 @@ import {
   Camera,
   CameraOff,
   Captions,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Flower2,
   LayoutGrid,
   MessageSquare,
   Mic,
   MicOff,
+  PanelTopClose,
+  PanelTopOpen,
   PhoneOff,
+  PictureInPicture2,
   ScreenShare,
   ScreenShareOff,
   Settings,
   SlidersHorizontal,
-  TowerControl,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import {
+  type CSSProperties,
   Dispatch,
   MutableRefObject,
+  PointerEvent as ReactPointerEvent,
   SetStateAction,
   useCallback,
   useEffect,
@@ -30,6 +39,11 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  CallRoomModals,
+  mediaLayoutModes,
+  screenShareResolutionOptions,
+} from "@/components/CallRoomModals";
 import { LanguageGate } from "@/components/LanguageGate";
 import { CaptionEvent, ConversationPanel } from "@/components/SubtitlesPanel";
 import { UsernameGate } from "@/components/UsernameGate";
@@ -41,25 +55,32 @@ import type {
   MediaSurfaceId,
 } from "@/components/VideoGrid";
 import { createAudioCapture, AudioCaptureController } from "@/lib/audioCapture";
-import { createEnhancedMicrophoneStream } from "@/lib/audioEnhancement";
+import {
+  createEnhancedMicrophoneStream,
+} from "@/lib/audioEnhancement";
+import type { MicrophoneProcessingSettings } from "@/lib/audioEnhancement";
 import {
   clearSavedLanguage,
   getSavedDisplayName,
   getSavedLanguage,
-  isSupportedLanguage,
   Language,
   saveDisplayName,
   saveLanguage,
-  supportedLanguageOptions,
   t,
 } from "@/lib/i18n";
-import type { TranslationKey } from "@/lib/i18n";
 import {
   getSavedParticipantSessionTokenForRoom,
   getSavedRoomCodeForRoom,
   saveParticipantSessionTokenForRoom,
 } from "@/lib/roomCode";
 import { getSocket } from "@/lib/socket";
+import {
+  applyTheme,
+  getSavedTheme,
+  saveTheme,
+  ThemeMode,
+  watchSystemTheme,
+} from "@/lib/theme";
 import {
   addStreamTracks,
   closePeerConnection,
@@ -190,6 +211,27 @@ type ScreenShareQualitySettings = {
 };
 type ScreenShareConnectionPath = "direct" | "relay" | "unknown";
 type ConnectionPathSummary = ScreenShareConnectionPath | "mixed";
+type FullscreenConversationMode = "visible" | "overlay" | "hidden";
+type ConversationDisplayMode = "panel" | "overlay" | "hidden";
+type ConversationModeOption = ConversationDisplayMode | "alwaysOnTop";
+type ConversationModeMenuPlacement = "dock" | "fullscreen";
+type ConversationModeMenuPosition = {
+  arrowLeft: number;
+  left: number;
+  top: number;
+  width: number;
+};
+type FullscreenConversationOffset = {
+  x: number;
+  y: number;
+};
+type FullscreenConversationDragState = {
+  originX: number;
+  originY: number;
+  pointerId: number;
+  startX: number;
+  startY: number;
+};
 type PeerConnectionPathSnapshot = {
   displayName: string;
   participantId: string;
@@ -206,30 +248,66 @@ type ScreenShareStatsSnapshot = {
   roundTripMs?: number;
   limitation?: string;
 };
+type CaptionPipMessage = {
+  id: string;
+  isLocal: boolean;
+  originalText: string;
+  speakerName: string;
+  timestamp: number;
+  translatedText: string;
+};
+type DocumentPictureInPictureOptions = {
+  disallowReturnToOpener?: boolean;
+  height?: number;
+  width?: number;
+};
+type DocumentPictureInPictureController = {
+  requestWindow: (
+    options?: DocumentPictureInPictureOptions,
+  ) => Promise<Window>;
+  window?: Window | null;
+};
+type WindowWithDocumentPictureInPicture = Window & {
+  documentPictureInPicture?: DocumentPictureInPictureController;
+};
+type VideoPictureInPictureElement = HTMLVideoElement & {
+  requestPictureInPicture?: () => Promise<unknown>;
+  webkitPresentationMode?: "fullscreen" | "inline" | "picture-in-picture";
+  webkitSetPresentationMode?: (
+    mode: "fullscreen" | "inline" | "picture-in-picture",
+  ) => void;
+};
+type DocumentWithVideoPictureInPicture = Document & {
+  exitPictureInPicture?: () => Promise<void>;
+  pictureInPictureElement?: Element | null;
+  pictureInPictureEnabled?: boolean;
+};
+type CaptionVideoPipController = {
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  stream: MediaStream;
+  video: VideoPictureInPictureElement;
+};
 
 const captionLogLimit = 80;
 const mediaLayoutStorageKey = "sakura.mediaLayoutMode";
-const mediaLayoutModes: MediaLayoutMode[] = [
-  "gallery",
-  "focus",
-  "speaker",
-  "collage",
-  "compact",
-];
-const mediaLayoutModeTranslationKeys: Record<MediaLayoutMode, TranslationKey> = {
-  gallery: "layoutGallery",
-  focus: "layoutFocus",
-  speaker: "layoutSpeaker",
-  collage: "layoutCollage",
-  compact: "layoutCompact",
+const fullscreenConversationModeStorageKey =
+  "sakura.fullscreenConversationMode";
+const localInputVolumeStorageKey = "sakura.localInputVolume";
+const masterOutputVolumeStorageKey = "sakura.masterOutputVolume";
+const remoteVolumeStorageKey = "sakura.remoteVolumes";
+const microphoneDeviceStorageKey = "sakura.microphoneDeviceId";
+const voiceSettingsStorageKey = "sakura.voiceSettings";
+const defaultVoiceSettings: MicrophoneProcessingSettings = {
+  noiseGate: 0.14,
+  noiseReduction: 0.62,
 };
-const screenSharePresetIds: ScreenSharePresetId[] = [
-  "detail",
-  "balanced",
-  "motion",
-  "ultra",
-  "custom",
-];
+const defaultLocalInputVolume = 0.5;
+const defaultMasterOutputVolume = 0.75;
+const initialFullscreenConversationOffset: FullscreenConversationOffset = {
+  x: 0,
+  y: 0,
+};
 const screenSharePresetDefaults: Record<
   Exclude<ScreenSharePresetId, "custom">,
   ScreenShareQualitySettings
@@ -272,12 +350,6 @@ const screenSharePresetDefaults: Record<
   },
 };
 const defaultScreenShareQuality = screenSharePresetDefaults.detail;
-const screenShareResolutionOptions = [
-  { label: "720p", width: 1280, height: 720 },
-  { label: "1080p", width: 1920, height: 1080 },
-  { label: "1440p", width: 2560, height: 1440 },
-  { label: "4K", width: 3840, height: 2160 },
-] as const;
 
 function isMediaLayoutMode(value: unknown): value is MediaLayoutMode {
   return (
@@ -299,6 +371,137 @@ function saveMediaLayoutMode(mode: MediaLayoutMode) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(mediaLayoutStorageKey, mode);
   }
+}
+
+function saveFullscreenConversationMode(mode: FullscreenConversationMode) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(fullscreenConversationModeStorageKey, mode);
+  }
+}
+
+function getSavedVolume(key: string, fallback = 1) {
+  const safeFallback = Number.isFinite(fallback)
+    ? Math.min(1, Math.max(0, fallback))
+    : 1;
+
+  if (typeof window === "undefined") {
+    return safeFallback;
+  }
+
+  const value = Number(window.localStorage.getItem(key));
+
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : safeFallback;
+}
+
+function saveVolume(key: string, volume: number) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(key, String(Math.min(1, Math.max(0, volume))));
+  }
+}
+
+function getSavedRemoteVolumes(): Record<string, number> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(remoteVolumeStorageKey) ?? "{}",
+    ) as Record<string, unknown>;
+
+    return Object.fromEntries(
+      Object.entries(parsed).map(([participantId, value]): [string, number] => [
+        participantId,
+        typeof value === "number" && Number.isFinite(value)
+          ? Math.min(1, Math.max(0, value))
+          : 1,
+      ]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveRemoteVolumes(volumes: Record<string, number>) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(remoteVolumeStorageKey, JSON.stringify(volumes));
+  }
+}
+
+function clampVoiceSetting(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : fallback;
+}
+
+function getSavedVoiceSettings(): MicrophoneProcessingSettings {
+  if (typeof window === "undefined") {
+    return defaultVoiceSettings;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(voiceSettingsStorageKey) ?? "{}",
+    ) as Record<string, unknown>;
+
+    return {
+      noiseGate: clampVoiceSetting(
+        parsed.noiseGate,
+        defaultVoiceSettings.noiseGate,
+      ),
+      noiseReduction: clampVoiceSetting(
+        parsed.noiseReduction,
+        defaultVoiceSettings.noiseReduction,
+      ),
+    };
+  } catch {
+    return defaultVoiceSettings;
+  }
+}
+
+function saveVoiceSettings(settings: MicrophoneProcessingSettings) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(
+      voiceSettingsStorageKey,
+      JSON.stringify({
+        noiseGate: Math.min(1, Math.max(0, settings.noiseGate)),
+        noiseReduction: Math.min(1, Math.max(0, settings.noiseReduction)),
+      }),
+    );
+  }
+}
+
+function getSavedMicrophoneDeviceId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(microphoneDeviceStorageKey) ?? "";
+}
+
+function saveMicrophoneDeviceId(deviceId: string) {
+  if (typeof window !== "undefined") {
+    if (deviceId) {
+      window.localStorage.setItem(microphoneDeviceStorageKey, deviceId);
+    } else {
+      window.localStorage.removeItem(microphoneDeviceStorageKey);
+    }
+  }
+}
+
+function microphoneConstraints(
+  settings: MicrophoneProcessingSettings,
+  deviceId: string,
+): MediaTrackConstraints {
+  return {
+    autoGainControl: false,
+    channelCount: 1,
+    deviceId: deviceId ? { exact: deviceId } : undefined,
+    echoCancellation: true,
+    noiseSuppression: settings.noiseReduction > 0.05,
+    sampleRate: { ideal: 48000 },
+    sampleSize: { ideal: 16 },
+  };
 }
 
 function stopSpeakingMonitor(
@@ -501,7 +704,12 @@ function attachStreamToVideo(video: HTMLVideoElement | null, stream: MediaStream
   }
 }
 
-function attachStreamToAudio(audio: HTMLAudioElement | null, stream: MediaStream | null) {
+function attachStreamToAudio(
+  audio: HTMLAudioElement | null,
+  stream: MediaStream | null,
+  volume = 1,
+  muted = false,
+) {
   if (!audio) {
     return;
   }
@@ -510,29 +718,20 @@ function attachStreamToAudio(audio: HTMLAudioElement | null, stream: MediaStream
     audio.srcObject = stream;
   }
 
-  audio.muted = false;
-  audio.volume = 1;
+  audio.muted = muted;
+  audio.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
 
   if (stream) {
     void audio.play().catch(() => undefined);
   }
 }
 
-function turnStatusLabel(language: Language, status: TurnStatus | null) {
-  switch (status?.phase) {
-    case "disabled":
-      return t(language, "turnRelayNotConfigured");
-    case "ready":
-      return t(language, "turnRelayReady");
-    case "error":
-      return t(language, "turnRelayError");
-    default:
-      return t(language, "turnRelayOff");
-  }
-}
-
 function clampQualityNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function screenShareConstraints(
@@ -637,17 +836,36 @@ function getSelectedConnectionPath(stats: RTCStatsReport): {
     selectedPair = stats.get(selectedPairId) ?? null;
   }
 
+  const candidatePairs: RTCStats[] = [];
+
   stats.forEach((report) => {
     if (
       !selectedPair &&
       report.type === "candidate-pair" &&
       reportString(report, "state") === "succeeded" &&
-      ((report as Record<string, unknown>).selected === true ||
-        (report as Record<string, unknown>).nominated === true)
+      ((report as unknown as Record<string, unknown>).selected === true ||
+        (report as unknown as Record<string, unknown>).nominated === true)
     ) {
-      selectedPair = report;
+      candidatePairs.push(report);
     }
   });
+
+  if (!selectedPair && candidatePairs.length > 0) {
+    selectedPair = candidatePairs.sort((first, second) => {
+      const firstSelected =
+        (first as unknown as Record<string, unknown>).selected === true ? 1 : 0;
+      const secondSelected =
+        (second as unknown as Record<string, unknown>).selected === true ? 1 : 0;
+      const firstBytes =
+        (reportNumber(first, "bytesSent") ?? 0) +
+        (reportNumber(first, "bytesReceived") ?? 0);
+      const secondBytes =
+        (reportNumber(second, "bytesSent") ?? 0) +
+        (reportNumber(second, "bytesReceived") ?? 0);
+
+      return secondSelected - firstSelected || secondBytes - firstBytes;
+    })[0];
+  }
 
   if (!selectedPair) {
     return { path: "unknown" };
@@ -697,49 +915,6 @@ function summarizeConnectionPath(
   }
 
   return "unknown";
-}
-
-function connectionPathLabel(language: Language, path: ConnectionPathSummary) {
-  switch (path) {
-    case "direct":
-      return t(language, "connectionPathDirect");
-    case "relay":
-      return t(language, "connectionPathRelay");
-    case "mixed":
-      return t(language, "connectionPathMixed");
-    case "unknown":
-      return t(language, "connectionPathUnknown");
-  }
-}
-
-function screenSharePresetLabel(language: Language, presetId: ScreenSharePresetId) {
-  switch (presetId) {
-    case "detail":
-      return t(language, "screenQualityDetail");
-    case "balanced":
-      return t(language, "screenQualityBalanced");
-    case "motion":
-      return t(language, "screenQualityMotion");
-    case "ultra":
-      return t(language, "screenQualityUltra");
-    case "custom":
-      return t(language, "screenQualityCustom");
-  }
-}
-
-function screenSharePresetHelp(language: Language, presetId: ScreenSharePresetId) {
-  switch (presetId) {
-    case "detail":
-      return t(language, "screenQualityDetailHelp");
-    case "balanced":
-      return t(language, "screenQualityBalancedHelp");
-    case "motion":
-      return t(language, "screenQualityMotionHelp");
-    case "ultra":
-      return t(language, "screenQualityUltraHelp");
-    case "custom":
-      return t(language, "screenQualityCustomHelp");
-  }
 }
 
 function createRemoteParticipant(participant: PublicParticipant): RemoteParticipantState {
@@ -856,13 +1031,409 @@ function activeDominantSurfaceId(
   );
 }
 
+function formatCaptionPipTime(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function captionPipMessageId(caption: CaptionEvent, isLocal: boolean) {
+  return `${isLocal ? "local" : "remote"}-${caption.timestamp}-${caption.speakerId}`;
+}
+
+function appendCaptionPipMessage(
+  messages: CaptionPipMessage[],
+  caption: CaptionEvent | null,
+  isLocal: boolean,
+  speakerName: string,
+) {
+  if (!caption) {
+    return messages;
+  }
+
+  const id = captionPipMessageId(caption, isLocal);
+
+  if (messages.some((message) => message.id === id)) {
+    return messages;
+  }
+
+  return [
+    ...messages,
+    {
+      id,
+      isLocal,
+      originalText: caption.originalText,
+      speakerName,
+      timestamp: caption.timestamp,
+      translatedText: caption.translatedText,
+    },
+  ];
+}
+
+function wrapCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+
+  for (const word of words) {
+    const nextLine = line ? `${line} ${word}` : word;
+
+    if (context.measureText(nextLine).width <= maxWidth || !line) {
+      line = nextLine;
+      continue;
+    }
+
+    lines.push(line);
+    line = word;
+  }
+
+  if (line) {
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+function drawRoundedRectangle(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(
+    x + width,
+    y + height,
+    x + width - safeRadius,
+    y + height,
+  );
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
+}
+
+function drawCaptionVideoPipCanvas({
+  emptyText,
+  messages,
+  title,
+  videoPip,
+}: {
+  emptyText: string;
+  messages: CaptionPipMessage[];
+  title: string;
+  videoPip: CaptionVideoPipController;
+}) {
+  const { canvas, context } = videoPip;
+  const width = canvas.width;
+  const height = canvas.height;
+  const padding = 42;
+
+  context.clearRect(0, 0, width, height);
+  const gradient = context.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "#2d1b2b");
+  gradient.addColorStop(0.62, "#211620");
+  gradient.addColorStop(1, "#3a2133");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+
+  context.fillStyle = "rgba(255, 141, 183, 0.16)";
+  context.beginPath();
+  context.arc(width * 0.18, height * 0.18, 148, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "rgba(215, 183, 255, 0.12)";
+  context.beginPath();
+  context.arc(width * 0.86, height * 0.1, 132, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = "#fff1f6";
+  context.font = "900 34px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  context.textBaseline = "top";
+  context.fillText(title, padding, padding);
+
+  const latestMessages = messages.slice(-4);
+
+  if (latestMessages.length === 0) {
+    context.fillStyle = "#efbfd1";
+    context.font = "900 30px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    context.textAlign = "center";
+    const lines = wrapCanvasText(context, emptyText, width - padding * 2);
+    const startY = height / 2 - (lines.length * 40) / 2;
+    lines.forEach((line, index) => {
+      context.fillText(line, width / 2, startY + index * 40);
+    });
+    context.textAlign = "left";
+    return;
+  }
+
+  let y = padding + 74;
+  const cardGap = 16;
+  const cardWidth = width - padding * 2;
+
+  for (const message of latestMessages) {
+    context.font = "900 22px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    const textLines = wrapCanvasText(
+      context,
+      message.translatedText || message.originalText,
+      cardWidth - 40,
+    ).slice(0, 3);
+    const cardHeight = 70 + textLines.length * 31;
+
+    context.fillStyle = message.isLocal
+      ? "rgba(66, 51, 88, 0.82)"
+      : "rgba(62, 42, 58, 0.82)";
+    context.strokeStyle = message.isLocal
+      ? "rgba(215, 183, 255, 0.34)"
+      : "rgba(255, 141, 183, 0.26)";
+    context.lineWidth = 2;
+    drawRoundedRectangle(context, padding, y, cardWidth, cardHeight, 18);
+    context.fill();
+    context.stroke();
+
+    context.fillStyle = "#efbfd1";
+    context.font = "900 18px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    context.fillText(message.speakerName, padding + 20, y + 18);
+
+    context.fillStyle = "#fff8fb";
+    context.font = "900 25px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    textLines.forEach((line, index) => {
+      context.fillText(line, padding + 20, y + 48 + index * 31);
+    });
+
+    y += cardHeight + cardGap;
+  }
+}
+
+function renderCaptionPipWindow({
+  emptyText,
+  messages,
+  pipWindow,
+  title,
+}: {
+  emptyText: string;
+  messages: CaptionPipMessage[];
+  pipWindow: Window;
+  title: string;
+}) {
+  const pipDocument = pipWindow.document;
+  pipDocument.title = title;
+
+  let style = pipDocument.getElementById("sakura-caption-pip-style");
+
+  if (!style) {
+    style = pipDocument.createElement("style");
+    style.id = "sakura-caption-pip-style";
+    style.textContent = `
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        background:
+          radial-gradient(circle at 18% 12%, rgba(255, 196, 215, 0.28), transparent 9rem),
+          linear-gradient(180deg, rgba(255, 252, 254, 0.98), rgba(255, 246, 250, 0.94));
+        color: #432536;
+        margin: 0;
+        min-height: 100vh;
+      }
+      .caption-pip {
+        box-sizing: border-box;
+        display: grid;
+        gap: 0.75rem;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 100vh;
+        padding: 0.9rem;
+      }
+      .caption-pip h1 {
+        align-items: center;
+        color: #7b3154;
+        display: flex;
+        font-size: 0.95rem;
+        font-weight: 950;
+        gap: 0.45rem;
+        line-height: 1;
+        margin: 0;
+      }
+      .caption-pip-list {
+        align-content: end;
+        display: grid;
+        gap: 0.55rem;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+      .caption-pip-message {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(217, 93, 138, 0.16);
+        border-radius: 0.58rem;
+        box-shadow: 0 10px 24px rgba(126, 57, 82, 0.08);
+        display: grid;
+        gap: 0.3rem;
+        padding: 0.7rem;
+      }
+      .caption-pip-message.is-local {
+        background: rgba(246, 235, 255, 0.72);
+        border-color: rgba(181, 139, 234, 0.24);
+      }
+      .caption-pip-meta {
+        align-items: center;
+        color: #7b5266;
+        display: flex;
+        font-size: 0.68rem;
+        font-weight: 900;
+        gap: 0.5rem;
+        justify-content: space-between;
+        line-height: 1.1;
+      }
+      .caption-pip-text {
+        color: #3f2333;
+        font-size: 0.98rem;
+        font-weight: 950;
+        line-height: 1.22;
+        margin: 0;
+      }
+      .caption-pip-original {
+        color: #7b5266;
+        font-size: 0.76rem;
+        font-weight: 800;
+        line-height: 1.25;
+        margin: 0;
+      }
+      .caption-pip-empty {
+        align-self: center;
+        color: #8c6174;
+        font-size: 0.9rem;
+        font-weight: 900;
+        line-height: 1.3;
+        margin: 0;
+        text-align: center;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background:
+            radial-gradient(circle at 16% 14%, rgba(143, 61, 104, 0.28), transparent 9rem),
+            linear-gradient(180deg, rgba(34, 24, 34, 0.98), rgba(26, 20, 28, 0.96));
+          color: #fff1f6;
+        }
+        .caption-pip h1 {
+          color: #ffe1ec;
+        }
+        .caption-pip-message {
+          background: rgba(62, 42, 58, 0.78);
+          border-color: rgba(255, 141, 183, 0.18);
+          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+        }
+        .caption-pip-message.is-local {
+          background: rgba(66, 51, 88, 0.72);
+          border-color: rgba(215, 183, 255, 0.22);
+        }
+        .caption-pip-meta,
+        .caption-pip-original,
+        .caption-pip-empty {
+          color: #efbfd1;
+        }
+        .caption-pip-text {
+          color: #fff8fb;
+        }
+      }
+    `;
+    pipDocument.head.append(style);
+  }
+
+  const root = pipDocument.createElement("main");
+  root.className = "caption-pip";
+
+  const heading = pipDocument.createElement("h1");
+  heading.textContent = title;
+  root.append(heading);
+
+  const list = pipDocument.createElement("section");
+  list.className = "caption-pip-list";
+  list.setAttribute("aria-live", "polite");
+
+  if (messages.length === 0) {
+    const empty = pipDocument.createElement("p");
+    empty.className = "caption-pip-empty";
+    empty.textContent = emptyText;
+    list.append(empty);
+  } else {
+    for (const message of messages) {
+      const article = pipDocument.createElement("article");
+      article.className = `caption-pip-message ${
+        message.isLocal ? "is-local" : "is-remote"
+      }`;
+
+      const meta = pipDocument.createElement("div");
+      meta.className = "caption-pip-meta";
+      const speaker = pipDocument.createElement("span");
+      speaker.textContent = message.speakerName;
+      const time = pipDocument.createElement("time");
+      time.dateTime = new Date(message.timestamp).toISOString();
+      time.textContent = formatCaptionPipTime(message.timestamp);
+      meta.append(speaker, time);
+
+      const translated = pipDocument.createElement("p");
+      translated.className = "caption-pip-text";
+      translated.textContent = message.translatedText;
+
+      article.append(meta, translated);
+
+      if (message.originalText && message.originalText !== message.translatedText) {
+        const original = pipDocument.createElement("p");
+        original.className = "caption-pip-original";
+        original.textContent = message.originalText;
+        article.append(original);
+      }
+
+      list.append(article);
+    }
+  }
+
+  root.append(list);
+  pipDocument.body.replaceChildren(root);
+  list.scrollTop = list.scrollHeight;
+}
+
 export function CallRoom({ roomId }: { roomId: string }) {
   const router = useRouter();
   const socket = useMemo(() => getSocket(), []);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const fullscreenShellRef = useRef<HTMLElement>(null);
+  const conversationOverlayRef = useRef<HTMLElement>(null);
+  const conversationOverlayDragRef =
+    useRef<FullscreenConversationDragState | null>(null);
+  const fullscreenConversationRef = useRef<HTMLElement>(null);
+  const fullscreenConversationDragRef =
+    useRef<FullscreenConversationDragState | null>(null);
+  const captionPipWindowRef = useRef<Window | null>(null);
+  const captionVideoPipRef = useRef<CaptionVideoPipController | null>(null);
+  const volumeButtonRef = useRef<HTMLButtonElement>(null);
+  const volumeMixerRef = useRef<HTMLDivElement>(null);
+  const dockConversationModeButtonRef = useRef<HTMLButtonElement>(null);
+  const fullscreenConversationModeButtonRef = useRef<HTMLButtonElement>(null);
+  const conversationModeMenuRef = useRef<HTMLDivElement>(null);
   const audioCaptureRef = useRef<AudioCaptureController | null>(null);
   const audioEnhancementStopRef = useRef<(() => void) | null>(null);
+  const audioInputGainRef = useRef<((gain: number) => void) | null>(null);
+  const audioInputProcessingRef =
+    useRef<((settings: MicrophoneProcessingSettings) => void) | null>(null);
+  const rawMicrophoneStreamRef = useRef<MediaStream | null>(null);
+  const selfMonitorAudioRef = useRef<HTMLAudioElement>(null);
+  const selfMonitorStreamRef = useRef<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localScreenStreamRef = useRef<MediaStream | null>(null);
   const participantIdRef = useRef<string>("");
@@ -885,6 +1456,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
     timestamp: number;
   } | null>(null);
   const stopScreenShareRef = useRef<StopScreenShareFn>(async () => undefined);
+  const deafenRestoreMutedRef = useRef<boolean | null>(null);
+  const micTestRestoreRef = useRef<{
+    deafenRestoreMuted: boolean | null;
+    isDeafened: boolean;
+    isMuted: boolean;
+  } | null>(null);
+  const stopMicrophoneTestRef = useRef<() => void>(() => undefined);
 
   const [language, setLanguage] = useState<Language | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -895,12 +1473,50 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [cameraError, setCameraError] = useState("");
   const [isCodeCopied, setIsCodeCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [showScreenShareSettings, setShowScreenShareSettings] = useState(false);
   const [showLayoutPicker, setShowLayoutPicker] = useState(false);
-  const [isConversationVisible, setIsConversationVisible] = useState(true);
+  const [showLeaveConfirmation, setShowLeaveConfirmation] = useState(false);
+  const [showVolumeMixer, setShowVolumeMixer] = useState(false);
+  const [showConversationModeMenu, setShowConversationModeMenu] = useState(false);
+  const [conversationModeMenuPlacement, setConversationModeMenuPlacement] =
+    useState<ConversationModeMenuPlacement>("dock");
+  const [conversationModeMenuPosition, setConversationModeMenuPosition] =
+    useState<ConversationModeMenuPosition | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>(() => getSavedTheme());
+  const [conversationDisplayMode, setConversationDisplayMode] =
+    useState<ConversationDisplayMode>("panel");
+  const [fullscreenConversationMode, setFullscreenConversationMode] =
+    useState<FullscreenConversationMode>("visible");
+  const [conversationOverlayOffset, setConversationOverlayOffset] =
+    useState<FullscreenConversationOffset>(initialFullscreenConversationOffset);
+  const [fullscreenConversationOffset, setFullscreenConversationOffset] =
+    useState<FullscreenConversationOffset>(initialFullscreenConversationOffset);
+  const [isFullscreenToolbarOpen, setIsFullscreenToolbarOpen] = useState(true);
+  const [isFullscreenBottomBarVisible, setIsFullscreenBottomBarVisible] =
+    useState(true);
+  const [isCaptionPipSupported, setIsCaptionPipSupported] = useState(false);
+  const [isCaptionPipOpen, setIsCaptionPipOpen] = useState(false);
   const [surfacePickerTarget, setSurfacePickerTarget] =
     useState<SurfacePickerTarget | null>(null);
+  const [localInputVolume, setLocalInputVolume] = useState(() =>
+    getSavedVolume(localInputVolumeStorageKey, defaultLocalInputVolume),
+  );
+  const [masterOutputVolume, setMasterOutputVolume] = useState(() =>
+    getSavedVolume(masterOutputVolumeStorageKey, defaultMasterOutputVolume),
+  );
+  const [remoteVolumes, setRemoteVolumes] = useState<Record<string, number>>({});
+  const [voiceSettings, setVoiceSettings] = useState<MicrophoneProcessingSettings>(
+    () => getSavedVoiceSettings(),
+  );
+  const [selectedMicrophoneDeviceId, setSelectedMicrophoneDeviceId] = useState(
+    () => getSavedMicrophoneDeviceId(),
+  );
+  const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
+  const [isTestingMicrophone, setIsTestingMicrophone] = useState(false);
+  const [isReplacingMicrophone, setIsReplacingMicrophone] = useState(false);
   const [startWithCameraOff, setStartWithCameraOff] = useState(false);
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
   const [isMediaReady, setIsMediaReady] = useState(false);
@@ -937,8 +1553,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
     useState(false);
   const [isStartingSubtitleService, setIsStartingSubtitleService] =
     useState(false);
-  const [hasAcceptedCaptionProcessing, setHasAcceptedCaptionProcessing] =
-    useState(false);
   const [localPartialCaption, setLocalPartialCaption] =
     useState<CaptionEvent | null>(null);
   const [localFinalCaption, setLocalFinalCaption] =
@@ -954,10 +1568,216 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
 
   const remoteParticipantsRef = useRef(remoteParticipants);
+  const localInputVolumeRef = useRef(localInputVolume);
+  const masterOutputVolumeRef = useRef(masterOutputVolume);
+  const remoteVolumesRef = useRef(remoteVolumes);
+  const voiceSettingsRef = useRef(voiceSettings);
+  const selectedMicrophoneDeviceIdRef = useRef(selectedMicrophoneDeviceId);
+  const isMutedRef = useRef(isMuted);
+  const isDeafenedRef = useRef(isDeafened);
+
+  const closeCaptionPipWindow = useCallback(({ restoreOverlay = false } = {}) => {
+    const pipWindow = captionPipWindowRef.current;
+    const videoPip = captionVideoPipRef.current;
+    captionPipWindowRef.current = null;
+    captionVideoPipRef.current = null;
+    setIsCaptionPipOpen(false);
+
+    if (pipWindow && !pipWindow.closed) {
+      pipWindow.close();
+    }
+
+    if (videoPip) {
+      const pipDocument = document as DocumentWithVideoPictureInPicture;
+
+      if (
+        pipDocument.pictureInPictureElement === videoPip.video &&
+        typeof pipDocument.exitPictureInPicture === "function"
+      ) {
+        void pipDocument.exitPictureInPicture().catch(() => undefined);
+      }
+
+      if (
+        videoPip.video.webkitPresentationMode === "picture-in-picture" &&
+        typeof videoPip.video.webkitSetPresentationMode === "function"
+      ) {
+        videoPip.video.webkitSetPresentationMode("inline");
+      }
+
+      for (const track of videoPip.stream.getTracks()) {
+        track.stop();
+      }
+
+      videoPip.video.remove();
+    }
+
+    if (restoreOverlay) {
+      setConversationDisplayMode((current) =>
+        current === "hidden" ? "overlay" : current,
+      );
+      setFullscreenConversationMode((current) => {
+        if (current !== "hidden") {
+          return current;
+        }
+
+        saveFullscreenConversationMode("overlay");
+        return "overlay";
+      });
+    }
+  }, []);
+
+  const updateConversationModeMenuPosition = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const anchor =
+      conversationModeMenuPlacement === "fullscreen"
+        ? fullscreenConversationModeButtonRef.current
+        : dockConversationModeButtonRef.current;
+    const menu = conversationModeMenuRef.current;
+
+    if (!anchor || !menu) {
+      return;
+    }
+
+    const viewportPadding = 8;
+    const gap = 12;
+    const anchorRect = anchor.getBoundingClientRect();
+    const maxMenuWidth = Math.max(0, window.innerWidth - viewportPadding * 2);
+    const menuWidth = Math.min(280, maxMenuWidth);
+    const menuHeight = menu.getBoundingClientRect().height || 192;
+    const anchorCenter = anchorRect.left + anchorRect.width / 2;
+    const left = clampNumber(
+      anchorCenter - menuWidth / 2,
+      viewportPadding,
+      Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding),
+    );
+    const top =
+      conversationModeMenuPlacement === "fullscreen"
+        ? clampNumber(
+            anchorRect.bottom + gap,
+            viewportPadding,
+            Math.max(
+              viewportPadding,
+              window.innerHeight - menuHeight - viewportPadding,
+            ),
+          )
+        : clampNumber(
+            anchorRect.top - menuHeight - gap,
+            viewportPadding,
+            Math.max(
+              viewportPadding,
+              window.innerHeight - menuHeight - viewportPadding,
+            ),
+          );
+
+    setConversationModeMenuPosition({
+      arrowLeft: clampNumber(anchorCenter - left, 18, menuWidth - 18),
+      left,
+      top,
+      width: menuWidth,
+    });
+  }, [conversationModeMenuPlacement]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const documentPictureInPicture = (
+      window as WindowWithDocumentPictureInPicture
+    ).documentPictureInPicture;
+    const pipDocument = document as DocumentWithVideoPictureInPicture;
+    const canvas = document.createElement("canvas");
+    const video = document.createElement("video") as VideoPictureInPictureElement;
+    const supportsVideoPip =
+      typeof canvas.captureStream === "function" &&
+      ((typeof video.requestPictureInPicture === "function" &&
+        pipDocument.pictureInPictureEnabled !== false) ||
+        typeof video.webkitSetPresentationMode === "function");
+
+    setIsCaptionPipSupported(
+      typeof documentPictureInPicture?.requestWindow === "function" ||
+        supportsVideoPip,
+    );
+  }, []);
+
+  useEffect(() => {
+    return () => closeCaptionPipWindow();
+  }, [closeCaptionPipWindow]);
+
+  useEffect(() => {
+    if (callState === "idle" || callState === "disconnected") {
+      closeCaptionPipWindow();
+      setShowConversationModeMenu(false);
+      setConversationModeMenuPosition(null);
+    }
+  }, [callState, closeCaptionPipWindow]);
+
+  useEffect(() => {
+    if (!showConversationModeMenu || typeof window === "undefined") {
+      return;
+    }
+
+    let frame = window.requestAnimationFrame(updateConversationModeMenuPosition);
+
+    function schedulePositionUpdate() {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateConversationModeMenuPosition);
+    }
+
+    window.addEventListener("resize", schedulePositionUpdate);
+    window.addEventListener("scroll", schedulePositionUpdate, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", schedulePositionUpdate);
+      window.removeEventListener("scroll", schedulePositionUpdate, true);
+    };
+  }, [
+    showConversationModeMenu,
+    updateConversationModeMenuPosition,
+  ]);
 
   useEffect(() => {
     remoteParticipantsRef.current = remoteParticipants;
   }, [remoteParticipants]);
+
+  useEffect(() => {
+    localInputVolumeRef.current = localInputVolume;
+    audioInputGainRef.current?.(localInputVolume);
+  }, [localInputVolume]);
+
+  useEffect(() => {
+    voiceSettingsRef.current = voiceSettings;
+    audioInputProcessingRef.current?.(voiceSettings);
+    saveVoiceSettings(voiceSettings);
+
+    for (const track of rawMicrophoneStreamRef.current?.getAudioTracks() ?? []) {
+      void track
+        .applyConstraints({
+          noiseSuppression: voiceSettings.noiseReduction > 0.05,
+        })
+        .catch(() => undefined);
+    }
+  }, [voiceSettings]);
+
+  useEffect(() => {
+    selectedMicrophoneDeviceIdRef.current = selectedMicrophoneDeviceId;
+  }, [selectedMicrophoneDeviceId]);
+
+  useEffect(() => {
+    masterOutputVolumeRef.current = masterOutputVolume;
+  }, [masterOutputVolume]);
+
+  useEffect(() => {
+    remoteVolumesRef.current = remoteVolumes;
+  }, [remoteVolumes]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
   const remoteList = useMemo(
     () =>
@@ -1112,9 +1932,27 @@ export function CallRoom({ roomId }: { roomId: string }) {
           `audio[data-participant-id="${participant.participantId}"]`,
         ),
         participant.audioStream,
+        (remoteVolumesRef.current[participant.participantId] ?? 1) *
+          masterOutputVolumeRef.current,
+        isDeafenedRef.current,
       );
     }
   }, []);
+
+  useEffect(() => {
+    isDeafenedRef.current = isDeafened;
+
+    if (isDeafened && !isMuted) {
+      for (const track of localStreamRef.current?.getAudioTracks() ?? []) {
+        track.enabled = false;
+      }
+
+      isMutedRef.current = true;
+      setIsMuted(true);
+    }
+
+    playRemoteAudio();
+  }, [isDeafened, isMuted, playRemoteAudio]);
 
   const attachLocalPreview = useCallback(() => {
     const previewStream =
@@ -1456,6 +2294,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           },
         }));
         setCallState("connected");
+        window.setTimeout(playRemoteAudio, 0);
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -1481,6 +2320,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     [
       addLocalTracksToPeer,
       createAndSendOffer,
+      playRemoteAudio,
       roomId,
       socket,
       startRemoteSpeakingMonitor,
@@ -1499,6 +2339,23 @@ export function CallRoom({ roomId }: { roomId: string }) {
     [createAndSendOffer],
   );
 
+  const refreshMicrophoneDevices = useCallback(async () => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.enumerateDevices
+    ) {
+      setMicrophoneDevices([]);
+      return;
+    }
+
+    const devices = await navigator.mediaDevices
+      .enumerateDevices()
+      .catch(() => []);
+    setMicrophoneDevices(
+      devices.filter((device) => device.kind === "audioinput"),
+    );
+  }, []);
+
   const stopLocalSubtitleCapture = useCallback(() => {
     audioCaptureRef.current?.stop();
     audioCaptureRef.current = null;
@@ -1512,7 +2369,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     const stream = localStreamRef.current;
 
-    if (!stream || !hasAcceptedCaptionProcessing) {
+    if (!stream) {
       return false;
     }
 
@@ -1534,7 +2391,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     });
     await audioCaptureRef.current.start();
     return true;
-  }, [hasAcceptedCaptionProcessing, roomId, socket]);
+  }, [roomId, socket]);
 
   const beginLocalSubtitleCapture = useCallback(async () => {
     const started = await startLocalSubtitleCapture();
@@ -1546,13 +2403,156 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return started;
   }, [startLocalSubtitleCapture]);
 
+  const createProcessedMicrophoneStream = useCallback(async () => {
+    const rawStream = await navigator.mediaDevices.getUserMedia({
+      audio: microphoneConstraints(
+        voiceSettingsRef.current,
+        selectedMicrophoneDeviceIdRef.current,
+      ),
+      video: false,
+    });
+    const enhancedMicrophone = await createEnhancedMicrophoneStream(
+      rawStream,
+      localInputVolumeRef.current,
+      voiceSettingsRef.current,
+    );
+
+    void refreshMicrophoneDevices();
+
+    return {
+      enhancedMicrophone,
+      rawStream,
+    };
+  }, [refreshMicrophoneDevices]);
+
+  const replaceLocalMicrophoneStream = useCallback(async () => {
+    const localStream = localStreamRef.current;
+
+    if (!localStream || !hasLiveAudioTrack(localStream)) {
+      return false;
+    }
+
+    const wasCapturingSubtitles = Boolean(audioCaptureRef.current);
+    const previousStop = audioEnhancementStopRef.current;
+    const previousAudioTracks = localStream.getAudioTracks();
+
+    if (wasCapturingSubtitles) {
+      stopLocalSubtitleCapture();
+    }
+
+    let enhancedMicrophone: Awaited<
+      ReturnType<typeof createProcessedMicrophoneStream>
+    >["enhancedMicrophone"];
+    let rawStream: MediaStream | null = null;
+
+    try {
+      const createdMicrophone = await createProcessedMicrophoneStream();
+      enhancedMicrophone = createdMicrophone.enhancedMicrophone;
+      rawStream = createdMicrophone.rawStream;
+    } catch (mediaError) {
+      if (wasCapturingSubtitles) {
+        await beginLocalSubtitleCapture();
+      }
+
+      setError(
+        mediaError instanceof DOMException && mediaError.name === "NotAllowedError"
+          ? t(languageRef.current, "microphonePermissionDenied")
+          : t(languageRef.current, "microphoneUnavailable"),
+      );
+      return false;
+    }
+
+    const [nextTrack] = enhancedMicrophone.stream.getAudioTracks();
+
+    if (!nextTrack) {
+      enhancedMicrophone.stop();
+      rawStream?.getTracks().forEach((track) => track.stop());
+
+      if (wasCapturingSubtitles) {
+        await beginLocalSubtitleCapture();
+      }
+
+      setError(t(languageRef.current, "microphoneUnavailable"));
+      return false;
+    }
+
+    nextTrack.enabled = !isMutedRef.current;
+
+    for (const track of previousAudioTracks) {
+      localStream.removeTrack(track);
+    }
+
+    localStream.addTrack(nextTrack);
+
+    let needsNegotiation = false;
+    await Promise.all(
+      [...peerConnectionsRef.current.values()].map(async (peerState) => {
+        const audioSender = peerState.peerConnection
+          .getSenders()
+          .find((sender) => sender.track?.kind === "audio");
+
+        if (audioSender) {
+          await audioSender.replaceTrack(nextTrack).catch(() => undefined);
+          return;
+        }
+
+        peerState.peerConnection.addTrack(nextTrack, localStream);
+        needsNegotiation = true;
+      }),
+    );
+
+    audioEnhancementStopRef.current = enhancedMicrophone.stop;
+    audioInputGainRef.current = enhancedMicrophone.setGain;
+    audioInputProcessingRef.current = enhancedMicrophone.setProcessing;
+    rawMicrophoneStreamRef.current = rawStream;
+    previousStop?.();
+    stopLocalSpeakingMonitor();
+    startLocalSpeakingMonitor(localStream);
+
+    if (wasCapturingSubtitles) {
+      await startLocalSubtitleCapture();
+    }
+
+    if (needsNegotiation && callState !== "idle") {
+      await createOffersForAllPeers();
+    }
+
+    return true;
+  }, [
+    beginLocalSubtitleCapture,
+    callState,
+    createOffersForAllPeers,
+    createProcessedMicrophoneStream,
+    startLocalSpeakingMonitor,
+    startLocalSubtitleCapture,
+    stopLocalSpeakingMonitor,
+    stopLocalSubtitleCapture,
+  ]);
+
   const stopLocalMediaTracks = useCallback((stream: MediaStream | null) => {
+    for (const track of selfMonitorStreamRef.current?.getTracks() ?? []) {
+      track.stop();
+    }
+
+    selfMonitorStreamRef.current = null;
+
+    if (selfMonitorAudioRef.current) {
+      selfMonitorAudioRef.current.pause();
+      selfMonitorAudioRef.current.srcObject = null;
+    }
+
+    micTestRestoreRef.current = null;
+    setIsTestingMicrophone(false);
+
     for (const track of stream?.getTracks() ?? []) {
       track.stop();
     }
 
     audioEnhancementStopRef.current?.();
     audioEnhancementStopRef.current = null;
+    audioInputGainRef.current = null;
+    audioInputProcessingRef.current = null;
+    rawMicrophoneStreamRef.current = null;
   }, []);
 
   const resetLocalMediaState = useCallback(() => {
@@ -1565,6 +2565,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setIsMediaReady(false);
     setIsCameraEnabled(false);
     setIsScreenSharing(false);
+    isDeafenedRef.current = false;
+    deafenRestoreMutedRef.current = null;
+    setIsDeafened(false);
     setActiveScreenShareQuality(null);
     setIsApplyingScreenQuality(false);
     setScreenShareStats(null);
@@ -1619,8 +2622,24 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     const savedLanguage = getSavedLanguage();
+    const savedLocalInputVolume = getSavedVolume(
+      localInputVolumeStorageKey,
+      defaultLocalInputVolume,
+    );
+    const savedMasterOutputVolume = getSavedVolume(
+      masterOutputVolumeStorageKey,
+      defaultMasterOutputVolume,
+    );
     setLanguage(savedLanguage);
     setMediaLayoutMode(getSavedMediaLayoutMode());
+    setFullscreenConversationMode("visible");
+    setConversationDisplayMode("panel");
+    saveFullscreenConversationMode("visible");
+    localInputVolumeRef.current = savedLocalInputVolume;
+    masterOutputVolumeRef.current = savedMasterOutputVolume;
+    setLocalInputVolume(savedLocalInputVolume);
+    setMasterOutputVolume(savedMasterOutputVolume);
+    setRemoteVolumes(getSavedRemoteVolumes());
 
     if (savedLanguage) {
       languageRef.current = savedLanguage;
@@ -1637,6 +2656,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
     participantSessionTokenRef.current =
       getSavedParticipantSessionTokenForRoom(roomId);
   }, [roomId]);
+
+  useEffect(() => {
+    applyTheme(theme);
+    return watchSystemTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!language) {
@@ -1711,9 +2735,35 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, []);
 
   useEffect(() => {
+    void refreshMicrophoneDevices();
+
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.addEventListener
+    ) {
+      return;
+    }
+
+    const handleDeviceChange = () => {
+      void refreshMicrophoneDevices();
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+    };
+  }, [refreshMicrophoneDevices]);
+
+  useEffect(() => {
     if (
       !showSettings &&
+      !showVoiceSettings &&
       !showLayoutPicker &&
+      !showLeaveConfirmation &&
       !showScreenShareSettings &&
       !surfacePickerTarget
     ) {
@@ -1722,8 +2772,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        stopMicrophoneTestRef.current();
         setShowSettings(false);
+        setShowVoiceSettings(false);
         setShowLayoutPicker(false);
+        setShowLeaveConfirmation(false);
         setShowScreenShareSettings(false);
         setSurfacePickerTarget(null);
         setScreenShareQuality((current) => activeScreenShareQuality ?? current);
@@ -1740,10 +2793,92 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [
     activeScreenShareQuality,
     showLayoutPicker,
+    showLeaveConfirmation,
     showScreenShareSettings,
     showSettings,
+    showVoiceSettings,
     surfacePickerTarget,
   ]);
+
+  useEffect(() => {
+    if (!showVolumeMixer) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (
+        volumeMixerRef.current?.contains(target) ||
+        volumeButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setShowVolumeMixer(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowVolumeMixer(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showVolumeMixer]);
+
+  useEffect(() => {
+    if (!showConversationModeMenu) {
+      setConversationModeMenuPosition(null);
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      const menuRoots = document.querySelectorAll(
+        "[data-conversation-mode-menu-root]",
+      );
+
+      for (const root of menuRoots) {
+        if (root.contains(target)) {
+          return;
+        }
+      }
+
+      setShowConversationModeMenu(false);
+      setConversationModeMenuPosition(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowConversationModeMenu(false);
+        setConversationModeMenuPosition(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showConversationModeMenu]);
 
   useEffect(() => {
     if (!isScreenSharing) {
@@ -2167,10 +3302,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     async function handleSubtitleServiceStarted() {
       setIsSubtitleServiceStarted(true);
       showSubtitleServiceBanner("subtitleServiceStartedNotice");
-
-      if (hasAcceptedCaptionProcessing) {
-        await beginLocalSubtitleCapture();
-      }
+      await beginLocalSubtitleCapture();
     }
 
     function handleSubtitleServiceStopped() {
@@ -2285,7 +3417,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
             upsertRemoteParticipant(participant);
             ensurePeerConnection(participant.participantId);
           }
-          if (response.subtitleServiceStarted && hasAcceptedCaptionProcessing) {
+          if (response.subtitleServiceStarted) {
             await beginLocalSubtitleCapture();
           }
         },
@@ -2351,7 +3483,6 @@ export function CallRoom({ roomId }: { roomId: string }) {
     callState,
     ensurePeerConnection,
     flushPendingIceCandidates,
-    hasAcceptedCaptionProcessing,
     refreshIceServersForRoom,
     rememberParticipantSessionToken,
     removeRemotePeer,
@@ -2412,17 +3543,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     resetLocalMediaState();
 
-    let audioStream: MediaStream;
+    let enhancedMicrophone: Awaited<
+      ReturnType<typeof createProcessedMicrophoneStream>
+    >["enhancedMicrophone"];
+    let rawMicrophoneStream: MediaStream;
+
     try {
-      audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      });
+      const createdMicrophone = await createProcessedMicrophoneStream();
+      enhancedMicrophone = createdMicrophone.enhancedMicrophone;
+      rawMicrophoneStream = createdMicrophone.rawStream;
     } catch (mediaError) {
       throw new Error(
         mediaError instanceof DOMException &&
@@ -2432,8 +3561,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
       );
     }
 
-    const enhancedMicrophone = await createEnhancedMicrophoneStream(audioStream);
     audioEnhancementStopRef.current = enhancedMicrophone.stop;
+    audioInputGainRef.current = enhancedMicrophone.setGain;
+    audioInputProcessingRef.current = enhancedMicrophone.setProcessing;
+    rawMicrophoneStreamRef.current = rawMicrophoneStream;
     const combinedStream = new MediaStream(enhancedMicrophone.stream.getAudioTracks());
 
     for (const track of combinedStream.getAudioTracks()) {
@@ -2468,6 +3599,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [
     isMuted,
     attachLocalPreview,
+    createProcessedMicrophoneStream,
     requestCameraTrack,
     resetLocalMediaState,
     startLocalSpeakingMonitor,
@@ -2626,7 +3758,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           });
         }
 
-        if (response.subtitleServiceStarted && hasAcceptedCaptionProcessing) {
+        if (response.subtitleServiceStarted) {
           await beginLocalSubtitleCapture();
         }
       },
@@ -2656,7 +3788,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
-    handleLeaveCall();
+    requestLeaveConfirmation();
   }
 
   async function handleCopyCode() {
@@ -2669,14 +3801,57 @@ export function CallRoom({ roomId }: { roomId: string }) {
     window.setTimeout(() => setIsCodeCopied(false), 1600);
   }
 
-  function handleToggleMute() {
-    playRemoteAudio();
-
-    const nextMuted = !isMuted;
+  function setLocalMuteState(nextMuted: boolean) {
     for (const track of localStreamRef.current?.getAudioTracks() ?? []) {
       track.enabled = !nextMuted;
     }
+
+    isMutedRef.current = nextMuted;
     setIsMuted(nextMuted);
+  }
+
+  function handleToggleMute() {
+    playRemoteAudio();
+
+    if (isTestingMicrophone) {
+      return;
+    }
+
+    if (isDeafenedRef.current && isMutedRef.current) {
+      deafenRestoreMutedRef.current = null;
+      isDeafenedRef.current = false;
+      setIsDeafened(false);
+      setLocalMuteState(false);
+      window.requestAnimationFrame(playRemoteAudio);
+      return;
+    }
+
+    setLocalMuteState(!isMutedRef.current);
+  }
+
+  function handleToggleDeafen() {
+    playRemoteAudio();
+
+    if (isTestingMicrophone) {
+      return;
+    }
+
+    if (isDeafenedRef.current) {
+      const restoredMuted = deafenRestoreMutedRef.current ?? false;
+      deafenRestoreMutedRef.current = null;
+      isDeafenedRef.current = false;
+      setIsDeafened(false);
+      setLocalMuteState(restoredMuted);
+      window.requestAnimationFrame(playRemoteAudio);
+      return;
+    }
+
+    deafenRestoreMutedRef.current = isMutedRef.current;
+    isDeafenedRef.current = true;
+    setIsDeafened(true);
+    setLocalMuteState(true);
+    setShowVolumeMixer(false);
+    window.requestAnimationFrame(playRemoteAudio);
   }
 
   function removePeerSenderForTrack(track: MediaStreamTrack) {
@@ -2843,7 +4018,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        audio: false,
+        audio: {
+          autoGainControl: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+        },
         video: screenShareConstraints(settings),
       });
       const [screenTrack] = screenStream.getVideoTracks();
@@ -2979,7 +4158,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
   }
 
-  function requestSubtitleServiceStart({ captureAfterStart = hasAcceptedCaptionProcessing } = {}) {
+  function requestSubtitleServiceStart() {
     if (isStartingSubtitleService) {
       return;
     }
@@ -3000,10 +4179,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         }
 
         setIsSubtitleServiceStarted(true);
-
-        if (captureAfterStart) {
-          await beginLocalSubtitleCapture();
-        }
+        await beginLocalSubtitleCapture();
       },
     );
   }
@@ -3011,23 +4187,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   function handleToggleSubtitleService() {
     playRemoteAudio();
 
-    if (!hasAcceptedCaptionProcessing) {
-      setHasAcceptedCaptionProcessing(true);
-
-      if (isSubtitleServiceStarted || !isRoomHost) {
-        void beginLocalSubtitleCapture();
-        return;
-      }
-    }
-
-    if (isStartingSubtitleService) {
-      return;
-    }
-
-    if (!isRoomHost) {
-      if (isSubtitleServiceStarted) {
-        void beginLocalSubtitleCapture();
-      }
+    if (isStartingSubtitleService || !isRoomHost) {
       return;
     }
 
@@ -3051,12 +4211,25 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
-    requestSubtitleServiceStart({ captureAfterStart: true });
+    requestSubtitleServiceStart();
+  }
+
+  function requestLeaveConfirmation() {
+    stopMicrophoneTestRef.current();
+    setShowConversationModeMenu(false);
+    setShowVolumeMixer(false);
+    setShowSettings(false);
+    setShowVoiceSettings(false);
+    setShowLayoutPicker(false);
+    setShowScreenShareSettings(false);
+    setSurfacePickerTarget(null);
+    setShowLeaveConfirmation(true);
   }
 
   function handleLeaveCall() {
     const participantId = participantIdRef.current;
 
+    setShowLeaveConfirmation(false);
     tearDownActiveCall();
 
     if (socket.connected) {
@@ -3069,30 +4242,41 @@ export function CallRoom({ roomId }: { roomId: string }) {
     router.push("/");
   }
 
-  function handleEnterFullscreen(surfaceId: MediaSurfaceId) {
+  const handleEnterFullscreen = useCallback((surfaceId: MediaSurfaceId) => {
     setFullscreenSurface(surfaceId);
     setDominantSurface(surfaceId);
+    setIsFullscreenBottomBarVisible(true);
 
     if (!document.fullscreenElement) {
       void document.documentElement.requestFullscreen?.().catch(() => undefined);
     }
-  }
+  }, []);
 
   function handleExitFullscreen() {
     setFullscreenSurface(null);
+    fullscreenConversationDragRef.current = null;
+    setFullscreenConversationOffset(initialFullscreenConversationOffset);
+    setIsFullscreenBottomBarVisible(true);
 
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
     }
   }
 
-  function handleOpenSurfacePicker(
+  const handleOpenSurfacePicker = useCallback((
     surfaceId: MediaSurfaceId,
     slot: MediaSurfacePlacement,
     scope: SurfacePickerTarget["scope"] = "call",
-  ) {
+  ) => {
     setSurfacePickerTarget({ scope, slot, surfaceId });
-  }
+  }, []);
+
+  const handleOpenFullscreenSurfacePicker = useCallback(
+    (surfaceId: MediaSurfaceId, slot: MediaSurfacePlacement) => {
+      handleOpenSurfacePicker(surfaceId, slot, "fullscreen");
+    },
+    [handleOpenSurfacePicker],
+  );
 
   function handleSelectSurfaceForTarget(selectedSurfaceId: MediaSurfaceId) {
     if (!surfacePickerTarget) {
@@ -3140,6 +4324,608 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setMediaLayoutMode(nextMode);
     saveMediaLayoutMode(nextMode);
     setShowLayoutPicker(false);
+  }
+
+  function handleThemeChange(nextTheme: ThemeMode) {
+    setTheme(nextTheme);
+    saveTheme(nextTheme);
+  }
+
+  function handleVoiceSettingChange(
+    field: keyof MicrophoneProcessingSettings,
+    value: string,
+  ) {
+    const nextValue = Number(value);
+
+    if (!Number.isFinite(nextValue)) {
+      return;
+    }
+
+    setVoiceSettings((current) => ({
+      ...current,
+      [field]: Math.min(1, Math.max(0, nextValue / 100)),
+    }));
+  }
+
+  async function handleMicrophoneDeviceChange(deviceId: string) {
+    selectedMicrophoneDeviceIdRef.current = deviceId;
+    setSelectedMicrophoneDeviceId(deviceId);
+    saveMicrophoneDeviceId(deviceId);
+
+    if (!hasLiveAudioTrack(localStreamRef.current)) {
+      return;
+    }
+
+    setIsReplacingMicrophone(true);
+
+    try {
+      await replaceLocalMicrophoneStream();
+    } finally {
+      setIsReplacingMicrophone(false);
+    }
+  }
+
+  function handleLocalInputVolumeChange(value: string) {
+    const nextVolume = Number(value);
+
+    if (!Number.isFinite(nextVolume)) {
+      return;
+    }
+
+    const clampedVolume = Math.min(1, Math.max(0, nextVolume / 100));
+    setLocalInputVolume(clampedVolume);
+    saveVolume(localInputVolumeStorageKey, clampedVolume);
+    audioInputGainRef.current?.(clampedVolume);
+  }
+
+  function handleMasterOutputVolumeChange(value: string) {
+    const nextVolume = Number(value);
+
+    if (!Number.isFinite(nextVolume)) {
+      return;
+    }
+
+    const clampedVolume = Math.min(1, Math.max(0, nextVolume / 100));
+    setMasterOutputVolume(clampedVolume);
+    masterOutputVolumeRef.current = clampedVolume;
+    saveVolume(masterOutputVolumeStorageKey, clampedVolume);
+    playRemoteAudio();
+  }
+
+  function handleRemoteVolumeChange(participantId: string, value: string) {
+    const nextVolume = Number(value);
+
+    if (!Number.isFinite(nextVolume)) {
+      return;
+    }
+
+    const clampedVolume = Math.min(1, Math.max(0, nextVolume / 100));
+    setRemoteVolumes((current) => {
+      const next = {
+        ...current,
+        [participantId]: clampedVolume,
+      };
+      saveRemoteVolumes(next);
+      return next;
+    });
+
+    attachStreamToAudio(
+      document.querySelector<HTMLAudioElement>(
+        `audio[data-participant-id="${participantId}"]`,
+      ),
+      remoteParticipantsRef.current[participantId]?.audioStream ?? null,
+      clampedVolume * masterOutputVolumeRef.current,
+      isDeafenedRef.current,
+    );
+  }
+
+  function stopMicrophoneTest({ restoreState = true } = {}) {
+    for (const track of selfMonitorStreamRef.current?.getTracks() ?? []) {
+      track.stop();
+    }
+
+    selfMonitorStreamRef.current = null;
+
+    if (selfMonitorAudioRef.current) {
+      selfMonitorAudioRef.current.pause();
+      selfMonitorAudioRef.current.srcObject = null;
+    }
+
+    setIsTestingMicrophone(false);
+
+    const restoreSnapshot = micTestRestoreRef.current;
+    micTestRestoreRef.current = null;
+
+    if (restoreState && restoreSnapshot) {
+      deafenRestoreMutedRef.current = restoreSnapshot.deafenRestoreMuted;
+      isDeafenedRef.current = restoreSnapshot.isDeafened;
+      setIsDeafened(restoreSnapshot.isDeafened);
+      setLocalMuteState(restoreSnapshot.isMuted);
+      window.requestAnimationFrame(playRemoteAudio);
+    }
+  }
+
+  stopMicrophoneTestRef.current = stopMicrophoneTest;
+
+  async function startMicrophoneTest() {
+    if (isTestingMicrophone) {
+      stopMicrophoneTest();
+      return;
+    }
+
+    let stream = localStreamRef.current;
+
+    if (!hasLiveAudioTrack(stream)) {
+      setIsPreparingMedia(true);
+
+      try {
+        stream = await requestMedia();
+      } catch (mediaError) {
+        const message = mediaError instanceof Error ? mediaError.message : "";
+
+        if (message === "microphone-denied") {
+          setError(t(languageRef.current, "microphonePermissionDenied"));
+        } else if (message === "browser-unsupported") {
+          setError(t(languageRef.current, "browserUnsupported"));
+        } else {
+          setError(t(languageRef.current, "microphoneUnavailable"));
+        }
+
+        return;
+      } finally {
+        setIsPreparingMedia(false);
+      }
+    }
+
+    const [audioTrack] = stream.getAudioTracks();
+
+    if (!audioTrack) {
+      setError(t(languageRef.current, "microphoneUnavailable"));
+      return;
+    }
+
+    const monitorTrack = audioTrack.clone();
+    monitorTrack.enabled = true;
+    const monitorStream = new MediaStream([monitorTrack]);
+    selfMonitorStreamRef.current = monitorStream;
+    micTestRestoreRef.current = {
+      deafenRestoreMuted: deafenRestoreMutedRef.current,
+      isDeafened: isDeafenedRef.current,
+      isMuted: isMutedRef.current,
+    };
+    deafenRestoreMutedRef.current = isMutedRef.current;
+    isDeafenedRef.current = true;
+    setIsDeafened(true);
+    setLocalMuteState(true);
+    setShowVolumeMixer(false);
+    setIsTestingMicrophone(true);
+
+    if (selfMonitorAudioRef.current) {
+      selfMonitorAudioRef.current.srcObject = monitorStream;
+      selfMonitorAudioRef.current.muted = false;
+      selfMonitorAudioRef.current.volume = 1;
+      void selfMonitorAudioRef.current.play().catch(() => undefined);
+    }
+
+    window.requestAnimationFrame(playRemoteAudio);
+  }
+
+  function closeVoiceSettings() {
+    stopMicrophoneTest();
+    setShowVoiceSettings(false);
+  }
+
+  function openVoiceSettings() {
+    setShowSettings(false);
+    setShowVoiceSettings(true);
+    void refreshMicrophoneDevices();
+  }
+
+  function resetConversationDragState() {
+    conversationOverlayDragRef.current = null;
+    fullscreenConversationDragRef.current = null;
+    setConversationOverlayOffset(initialFullscreenConversationOffset);
+    setFullscreenConversationOffset(initialFullscreenConversationOffset);
+  }
+
+  function handleFullscreenConversationModeChange(
+    nextMode: FullscreenConversationMode,
+  ) {
+    setFullscreenConversationMode(nextMode);
+    saveFullscreenConversationMode(nextMode);
+
+    if (nextMode !== "overlay") {
+      resetConversationDragState();
+    }
+  }
+
+  async function openCaptionVideoPip() {
+    if (typeof document === "undefined" || !language) {
+      return false;
+    }
+
+    if (captionVideoPipRef.current) {
+      drawCaptionVideoPipCanvas({
+        emptyText: t(language, "noConversationYet"),
+        messages: captionPipMessages,
+        title: t(language, "conversation"),
+        videoPip: captionVideoPipRef.current,
+      });
+      setIsCaptionPipOpen(true);
+      return true;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 840;
+    canvas.height = 560;
+
+    if (typeof canvas.captureStream !== "function") {
+      return false;
+    }
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      return false;
+    }
+
+    const stream = canvas.captureStream(2);
+    const video = document.createElement("video") as VideoPictureInPictureElement;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    video.style.height = "1px";
+    video.style.left = "-1000px";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    video.style.position = "fixed";
+    video.style.top = "0";
+    video.style.width = "1px";
+    document.body.append(video);
+
+    const videoPip: CaptionVideoPipController = {
+      canvas,
+      context,
+      stream,
+      video,
+    };
+    drawCaptionVideoPipCanvas({
+      emptyText: t(language, "noConversationYet"),
+      messages: captionPipMessages,
+      title: t(language, "conversation"),
+      videoPip,
+    });
+
+    try {
+      await video.play();
+
+      if (
+        typeof video.requestPictureInPicture === "function" &&
+        (document as DocumentWithVideoPictureInPicture)
+          .pictureInPictureEnabled !== false
+      ) {
+        await video.requestPictureInPicture();
+      } else if (typeof video.webkitSetPresentationMode === "function") {
+        video.webkitSetPresentationMode("picture-in-picture");
+      } else {
+        throw new Error("picture-in-picture-unavailable");
+      }
+
+      captionVideoPipRef.current = videoPip;
+      setIsCaptionPipOpen(true);
+      video.addEventListener(
+        "leavepictureinpicture",
+        () => closeCaptionPipWindow({ restoreOverlay: true }),
+        { once: true },
+      );
+      video.addEventListener("webkitpresentationmodechanged", () => {
+        if (
+          captionVideoPipRef.current === videoPip &&
+          video.webkitPresentationMode !== "picture-in-picture"
+        ) {
+          closeCaptionPipWindow({ restoreOverlay: true });
+        }
+      });
+      return true;
+    } catch {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+
+      video.remove();
+      return false;
+    }
+  }
+
+  async function openCaptionPipWindow() {
+    if (typeof window === "undefined" || !language) {
+      return false;
+    }
+
+    if (captionPipWindowRef.current && !captionPipWindowRef.current.closed) {
+      setIsCaptionPipOpen(true);
+      return true;
+    }
+
+    const documentPictureInPicture = (
+      window as WindowWithDocumentPictureInPicture
+    ).documentPictureInPicture;
+
+    if (typeof documentPictureInPicture?.requestWindow !== "function") {
+      return openCaptionVideoPip();
+    }
+
+    try {
+      const pipWindow = await documentPictureInPicture.requestWindow({
+        disallowReturnToOpener: false,
+        height: 560,
+        width: 420,
+      });
+
+      captionPipWindowRef.current = pipWindow;
+      setIsCaptionPipOpen(true);
+      pipWindow.addEventListener(
+        "pagehide",
+        () => {
+          if (captionPipWindowRef.current === pipWindow) {
+            captionPipWindowRef.current = null;
+            setIsCaptionPipOpen(false);
+            setConversationDisplayMode((current) =>
+              current === "hidden" ? "overlay" : current,
+            );
+            setFullscreenConversationMode((current) => {
+              if (current !== "hidden") {
+                return current;
+              }
+
+              saveFullscreenConversationMode("overlay");
+              return "overlay";
+            });
+          }
+        },
+        { once: true },
+      );
+      renderCaptionPipWindow({
+        emptyText: t(language, "noConversationYet"),
+        messages: captionPipMessages,
+        pipWindow,
+        title: t(language, "conversation"),
+      });
+      return true;
+    } catch {
+      captionPipWindowRef.current = null;
+      setIsCaptionPipOpen(false);
+      return openCaptionVideoPip();
+    }
+  }
+
+  function handleConversationModeMenuToggle(
+    placement: ConversationModeMenuPlacement,
+  ) {
+    setShowVolumeMixer(false);
+    setConversationModeMenuPlacement(placement);
+    setConversationModeMenuPosition(null);
+    setShowConversationModeMenu((current) =>
+      current && conversationModeMenuPlacement === placement ? false : true,
+    );
+  }
+
+  async function handleSelectConversationMode(option: ConversationModeOption) {
+    setShowVolumeMixer(false);
+    setShowConversationModeMenu(false);
+    setConversationModeMenuPosition(null);
+
+    if (option === "panel") {
+      closeCaptionPipWindow();
+      setConversationDisplayMode("panel");
+      resetConversationDragState();
+      handleFullscreenConversationModeChange("visible");
+      return;
+    }
+
+    if (option === "overlay") {
+      closeCaptionPipWindow();
+      setConversationDisplayMode("overlay");
+      handleFullscreenConversationModeChange("overlay");
+      return;
+    }
+
+    if (option === "hidden") {
+      closeCaptionPipWindow();
+      setConversationDisplayMode("hidden");
+      resetConversationDragState();
+      handleFullscreenConversationModeChange("hidden");
+      return;
+    }
+
+    if (!isCaptionPipSupported) {
+      setError(t(languageRef.current, "captionsAlwaysOnTopUnavailable"));
+      return;
+    }
+
+    const previousConversationMode = conversationDisplayMode;
+    const previousFullscreenConversationMode = fullscreenConversationMode;
+    setConversationDisplayMode("hidden");
+    setFullscreenConversationMode("hidden");
+    saveFullscreenConversationMode("overlay");
+    resetConversationDragState();
+    const isPipOpen = await openCaptionPipWindow();
+
+    if (!isPipOpen) {
+      setConversationDisplayMode(previousConversationMode);
+      setFullscreenConversationMode(previousFullscreenConversationMode);
+      saveFullscreenConversationMode(previousFullscreenConversationMode);
+      setError(t(languageRef.current, "captionsAlwaysOnTopUnavailable"));
+    }
+  }
+
+  function getConversationDragBounds(
+    element: HTMLElement | null,
+    offset: FullscreenConversationOffset,
+  ) {
+    if (typeof window === "undefined") {
+      return {
+        maxX: 0,
+        maxY: 0,
+        minX: 0,
+        minY: 0,
+      };
+    }
+
+    const rect = element?.getBoundingClientRect();
+    const viewportPadding = 8;
+
+    if (!rect) {
+      return {
+        maxX: Math.max(0, window.innerWidth - 160),
+        maxY: Math.max(0, window.innerHeight - 120),
+        minX: -Math.max(0, window.innerWidth - 160),
+        minY: -Math.max(0, window.innerHeight - 120),
+      };
+    }
+
+    const baseLeft = rect.left - offset.x;
+    const baseRight = rect.right - offset.x;
+    const baseTop = rect.top - offset.y;
+    const baseBottom = rect.bottom - offset.y;
+
+    return {
+      maxX: window.innerWidth - viewportPadding - baseRight,
+      maxY: window.innerHeight - viewportPadding - baseBottom,
+      minX: viewportPadding - baseLeft,
+      minY: viewportPadding - baseTop,
+    };
+  }
+
+  function getConversationOverlayDragBounds() {
+    return getConversationDragBounds(
+      conversationOverlayRef.current,
+      conversationOverlayOffset,
+    );
+  }
+
+  function getFullscreenConversationDragBounds() {
+    return getConversationDragBounds(
+      fullscreenConversationRef.current,
+      fullscreenConversationOffset,
+    );
+  }
+
+  function handleConversationOverlayDragStart(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    if (conversationDisplayMode !== "overlay") {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    conversationOverlayDragRef.current = {
+      originX: conversationOverlayOffset.x,
+      originY: conversationOverlayOffset.y,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+  }
+
+  function handleConversationOverlayDragMove(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const dragState = conversationOverlayDragRef.current;
+
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const bounds = getConversationOverlayDragBounds();
+    setConversationOverlayOffset({
+      x: clampNumber(
+        dragState.originX + event.clientX - dragState.startX,
+        bounds.minX,
+        bounds.maxX,
+      ),
+      y: clampNumber(
+        dragState.originY + event.clientY - dragState.startY,
+        bounds.minY,
+        bounds.maxY,
+      ),
+    });
+  }
+
+  function handleConversationOverlayDragEnd(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const dragState = conversationOverlayDragRef.current;
+
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    conversationOverlayDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleFullscreenConversationDragStart(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    if (fullscreenConversationMode !== "overlay") {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    fullscreenConversationDragRef.current = {
+      originX: fullscreenConversationOffset.x,
+      originY: fullscreenConversationOffset.y,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+  }
+
+  function handleFullscreenConversationDragMove(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const dragState = fullscreenConversationDragRef.current;
+
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    const bounds = getFullscreenConversationDragBounds();
+    setFullscreenConversationOffset({
+      x: clampNumber(
+        dragState.originX + event.clientX - dragState.startX,
+        bounds.minX,
+        bounds.maxX,
+      ),
+      y: clampNumber(
+        dragState.originY + event.clientY - dragState.startY,
+        bounds.minY,
+        bounds.maxY,
+      ),
+    });
+  }
+
+  function handleFullscreenConversationDragEnd(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const dragState = fullscreenConversationDragRef.current;
+
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    fullscreenConversationDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   const selectedScreenResolution = useMemo(() => {
@@ -3240,10 +5026,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return roomInfo?.isCreator ? t(language, "roomSetup") : t(language, "joinCall");
   }, [callState, language, roomInfo?.isCreator]);
 
-  const surfaces: MediaSurface[] = (() => {
+  const surfaces: MediaSurface[] = useMemo(() => {
     const localId = participantIdRef.current || "local";
+    const shouldCheckLocalVideo =
+      isMediaReady || isCameraEnabled || callState !== "idle";
     const localVideoStream =
-      localStreamRef.current && hasLiveVideoTrack(localStreamRef.current)
+      shouldCheckLocalVideo &&
+      localStreamRef.current &&
+      hasLiveVideoTrack(localStreamRef.current)
         ? localStreamRef.current
         : null;
     const localHasVideo = Boolean(localVideoStream);
@@ -3255,7 +5045,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
         isSpeaking: isLocalSpeaking,
         kind: "participant",
         label: displayName || t(language ?? "en", "localVideo"),
-        status: isMuted ? t(language ?? "en", "muted") : "",
+        status: isDeafened
+          ? t(language ?? "en", "deafened")
+          : isMuted
+            ? t(language ?? "en", "muted")
+            : "",
         stream: localVideoStream,
       },
     ];
@@ -3296,16 +5090,36 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     return nextSurfaces;
-  })();
-  const orderedSurfaces = orderMediaSurfaces(surfaces, surfaceOrder);
+  }, [
+    callState,
+    displayName,
+    isCameraEnabled,
+    isDeafened,
+    isLocalSpeaking,
+    isMediaReady,
+    isMuted,
+    isScreenSharing,
+    language,
+    remoteList,
+  ]);
+  const orderedSurfaces = useMemo(
+    () => orderMediaSurfaces(surfaces, surfaceOrder),
+    [surfaces, surfaceOrder],
+  );
   const fullscreenSurfaceKind = fullscreenSurface
     ? orderedSurfaces.find((surface) => surface.id === fullscreenSurface)?.kind ?? null
     : null;
+  const fullscreenSurfaceCount = orderedSurfaces.filter(
+    (surface) => surface.stream || surface.kind === "participant",
+  ).length;
+  const fullscreenHasBottomBar =
+    fullscreenSurfaceKind === "screen" && fullscreenSurfaceCount > 1;
   const surfacePickerSelectedId = surfacePickerTarget?.surfaceId ?? null;
   const surfacePickerTitleKey =
     surfacePickerTarget?.slot === "dominant"
       ? "chooseDominantView"
       : "chooseSmallView";
+  const isSetupCameraOn = isMediaReady ? isCameraEnabled : !startWithCameraOff;
 
   const captionSpeakerNames = useMemo(() => {
     const names: Record<string, string> = {
@@ -3319,32 +5133,318 @@ export function CallRoom({ roomId }: { roomId: string }) {
     return names;
   }, [displayName, language, remoteList]);
 
-  const activeControls = callState !== "idle" && language ? (
-    <section
-      aria-label={t(language, "callControls")}
-      className="call-control-bar garden-panel"
-    >
-      <button
-        type="button"
-        aria-label={isMuted ? t(language, "unmute") : t(language, "mute")}
-        onClick={handleToggleMute}
-        className={`call-control-button ${isMuted ? "is-active" : ""}`}
-      >
-        <span className="call-control-icon" aria-hidden="true">
-          {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-        </span>
-        <span className="call-control-label">{t(language, "micControl")}</span>
-      </button>
+  const captionPipMessages = useMemo(() => {
+    const localName = displayName || t(language ?? "en", "localVideo");
+    const localMessages = localCaptionLog.map((caption): CaptionPipMessage => ({
+      id: captionPipMessageId(caption, true),
+      isLocal: true,
+      originalText: caption.originalText,
+      speakerName: localName,
+      timestamp: caption.timestamp,
+      translatedText: caption.translatedText,
+    }));
+    const remoteMessages = remoteCaptionLog.map((caption): CaptionPipMessage => ({
+      id: captionPipMessageId(caption, false),
+      isLocal: false,
+      originalText: caption.originalText,
+      speakerName:
+        captionSpeakerNames[caption.speakerId] ?? t(language ?? "en", "participants"),
+      timestamp: caption.timestamp,
+      translatedText: caption.translatedText,
+    }));
+    const withLocalLive = appendCaptionPipMessage(
+      [...localMessages, ...remoteMessages],
+      localPartialCaption,
+      true,
+      localName,
+    );
 
-      {isRoomHost || (isSubtitleServiceStarted && !hasAcceptedCaptionProcessing) ? (
+    return withLocalLive.sort((first, second) => first.timestamp - second.timestamp);
+  }, [
+    captionSpeakerNames,
+    displayName,
+    language,
+    localCaptionLog,
+    localPartialCaption,
+    remoteCaptionLog,
+  ]);
+
+  useEffect(() => {
+    const pipWindow = captionPipWindowRef.current;
+    const videoPip = captionVideoPipRef.current;
+
+    if (!language || !pipWindow || pipWindow.closed) {
+      if (pipWindow?.closed) {
+        captionPipWindowRef.current = null;
+        setIsCaptionPipOpen(false);
+      }
+
+      if (language && videoPip) {
+        drawCaptionVideoPipCanvas({
+          emptyText: t(language, "noConversationYet"),
+          messages: captionPipMessages,
+          title: t(language, "conversation"),
+          videoPip,
+        });
+      }
+
+      return;
+    }
+
+    renderCaptionPipWindow({
+      emptyText: t(language, "noConversationYet"),
+      messages: captionPipMessages,
+      pipWindow,
+      title: t(language, "conversation"),
+    });
+
+    if (videoPip) {
+      drawCaptionVideoPipCanvas({
+        emptyText: t(language, "noConversationYet"),
+        messages: captionPipMessages,
+        title: t(language, "conversation"),
+        videoPip,
+      });
+    }
+  }, [captionPipMessages, language]);
+
+  const selectedConversationModeOption: ConversationModeOption = isCaptionPipOpen
+    ? "alwaysOnTop"
+    : conversationDisplayMode;
+
+  function renderConversationModeMenu() {
+    if (!language || !showConversationModeMenu) {
+      return null;
+    }
+
+    const conversationModeOptions = [
+      {
+        icon: Captions,
+        id: "panel" as const,
+        label: t(language, "conversationModePanel"),
+      },
+      {
+        icon: MessageSquare,
+        id: "overlay" as const,
+        label: t(language, "conversationModeOverlay"),
+      },
+      {
+        icon: PictureInPicture2,
+        id: "alwaysOnTop" as const,
+        label: t(language, "conversationModeAlwaysOnTop"),
+        title: isCaptionPipSupported
+          ? t(language, "captionsAlwaysOnTop")
+          : t(language, "captionsAlwaysOnTopUnavailable"),
+      },
+      {
+        icon: X,
+        id: "hidden" as const,
+        label: t(language, "conversationModeHidden"),
+      },
+    ];
+    const menuStyle = conversationModeMenuPosition
+      ? ({
+          "--conversation-menu-arrow-left": `${conversationModeMenuPosition.arrowLeft}px`,
+          left: `${conversationModeMenuPosition.left}px`,
+          top: `${conversationModeMenuPosition.top}px`,
+          width: `${conversationModeMenuPosition.width}px`,
+        } as CSSProperties)
+      : ({
+          left: 0,
+          top: 0,
+          visibility: "hidden",
+          width: "min(17.5rem, calc(100vw - 1rem))",
+        } as CSSProperties);
+
+    return (
+      <div
+        ref={conversationModeMenuRef}
+        id={`conversation-mode-menu-${conversationModeMenuPlacement}`}
+        role="menu"
+        aria-label={t(language, "conversationModeMenu")}
+        className={`conversation-mode-popover is-${conversationModeMenuPlacement}`}
+        data-conversation-mode-menu-root
+        style={menuStyle}
+      >
+        {conversationModeOptions.map((option) => {
+          const Icon = option.icon;
+          const isSelected = selectedConversationModeOption === option.id;
+          const isUnavailable =
+            option.id === "alwaysOnTop" && !isCaptionPipSupported;
+
+          return (
+            <button
+              key={option.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={isSelected}
+              aria-disabled={isUnavailable}
+              disabled={isUnavailable}
+              title={option.title}
+              onClick={() => void handleSelectConversationMode(option.id)}
+              className={`conversation-mode-option ${
+                isSelected ? "is-selected" : ""
+              } ${isUnavailable ? "is-unavailable" : ""}`}
+            >
+              <Icon className="h-4 w-4" aria-hidden="true" />
+              <span>{option.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const conversationModeMenuPortal =
+    typeof document !== "undefined" && showConversationModeMenu
+      ? createPortal(renderConversationModeMenu(), document.body)
+      : null;
+
+  const mixerChannels = language
+    ? [
+        {
+          ariaLabel: t(language, "mixerMicInputVolume"),
+          id: "local-input",
+          kind: "input",
+          label: t(language, "mixerMicInput"),
+          onChange: handleLocalInputVolumeChange,
+          value: Math.round(localInputVolume * 100),
+        },
+        {
+          ariaLabel: t(language, "mixerMasterOutputVolume"),
+          id: "master-output",
+          kind: "master",
+          label: t(language, "mixerMasterOutput"),
+          onChange: handleMasterOutputVolumeChange,
+          value: Math.round(masterOutputVolume * 100),
+        },
+        ...remoteList.map((participant) => ({
+          ariaLabel: `${participant.displayName} ${t(language, "volume")}`,
+          id: participant.participantId,
+          kind: "remote",
+          label: participant.displayName,
+          onChange: (value: string) =>
+            handleRemoteVolumeChange(participant.participantId, value),
+          value: Math.round(
+            (remoteVolumes[participant.participantId] ?? 1) * 100,
+          ),
+        })),
+      ]
+    : [];
+
+  const volumeMixer =
+    language && showVolumeMixer ? (
+      <div
+        ref={volumeMixerRef}
+        id="participant-volume-mixer"
+        role="dialog"
+        aria-label={t(language, "participantAudio")}
+        className="call-control-mixer-popover"
+      >
+        <div className="call-control-mixer-header">
+          <div className="garden-bubble grid h-10 w-10 shrink-0 place-items-center rounded-full">
+            <Volume2 className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <p className="call-control-mixer-kicker">
+              {t(language, "audioMixerControl")}
+            </p>
+            <h2>{t(language, "audioMixerTitle")}</h2>
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          className="call-control-mixer-voice-button"
+          onClick={() => {
+            setShowVolumeMixer(false);
+            setShowVoiceSettings(true);
+            void refreshMicrophoneDevices();
+          }}
+        >
+          <span className="garden-bubble grid h-9 w-9 shrink-0 place-items-center rounded-full">
+            <Mic className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="call-control-mixer-voice-copy">
+            <strong>{t(language, "voiceSettingsTitle")}</strong>
+            <small>{t(language, "voiceSettingsSummary")}</small>
+          </span>
+          <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden="true" />
+        </button>
+        <div className="audio-mixer-faders" role="group" aria-label={t(language, "audioMixerTitle")}>
+          {mixerChannels.map((channel) => (
+            <label
+              className={`audio-mixer-channel is-${channel.kind}`}
+              key={channel.id}
+            >
+              <span className="audio-mixer-value">{channel.value}%</span>
+              <input
+                aria-label={channel.ariaLabel}
+                aria-orientation="vertical"
+                className="audio-mixer-slider"
+                max="100"
+                min="0"
+                onChange={(event) => channel.onChange(event.target.value)}
+                step="1"
+                type="range"
+                value={channel.value}
+              />
+              <span className="audio-mixer-name">{channel.label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
+  const activeControls = callState !== "idle" && language ? (
+    <div className="call-control-dock">
+	      <section
+	        aria-label={t(language, "callControls")}
+	        className="call-control-bar garden-panel"
+	      >
+	        <button
+	          type="button"
+	          aria-label={isMuted ? t(language, "unmute") : t(language, "mute")}
+	          onClick={handleToggleMute}
+	          className={`call-control-button ${isMuted ? "is-active" : ""}`}
+	        >
+	          <span className="call-control-icon" aria-hidden="true">
+	            {isMuted ? (
+	              <MicOff className="h-5 w-5" />
+	            ) : (
+	              <Mic className="h-5 w-5" />
+	            )}
+	          </span>
+	          <span className="call-control-label">{t(language, "micControl")}</span>
+	        </button>
+
+	        <button
+	          type="button"
+	          aria-label={
+	            isDeafened ? t(language, "undeafen") : t(language, "deafen")
+	          }
+	          onClick={handleToggleDeafen}
+	          className={`call-control-button ${isDeafened ? "is-active" : ""}`}
+	        >
+	          <span className="call-control-icon" aria-hidden="true">
+	            {isDeafened ? (
+	              <VolumeX className="h-5 w-5" />
+	            ) : (
+	              <Volume2 className="h-5 w-5" />
+	            )}
+	          </span>
+	          <span className="call-control-label">
+	            {t(language, "deafenControl")}
+	          </span>
+	        </button>
+
+	        {isRoomHost ? (
         <button
           type="button"
           aria-label={
-            !hasAcceptedCaptionProcessing
-              ? t(language, "captionPrivacyConfirm")
-              : isSubtitleServiceStarted
-                ? t(language, "stopSubtitleService")
-                : t(language, "startSubtitleService")
+            isSubtitleServiceStarted
+              ? t(language, "stopSubtitleService")
+              : t(language, "startSubtitleService")
           }
           onClick={handleToggleSubtitleService}
           disabled={isStartingSubtitleService}
@@ -3437,28 +5537,60 @@ export function CallRoom({ roomId }: { roomId: string }) {
       </button>
 
       <button
+        ref={volumeButtonRef}
         type="button"
-        aria-label={
-          isConversationVisible
-            ? t(language, "hideConversation")
-            : t(language, "showConversation")
-        }
-        aria-pressed={isConversationVisible}
-        onClick={() => setIsConversationVisible((current) => !current)}
-        className={`call-control-button ${isConversationVisible ? "is-active" : ""}`}
+        aria-controls="participant-volume-mixer"
+        aria-expanded={showVolumeMixer}
+        aria-haspopup="dialog"
+        aria-label={t(language, "participantAudio")}
+        onClick={() => {
+          setShowConversationModeMenu(false);
+          setShowVolumeMixer((current) => !current);
+        }}
+        className={`call-control-button ${showVolumeMixer ? "is-active" : ""}`}
       >
         <span className="call-control-icon" aria-hidden="true">
-          <MessageSquare className="h-5 w-5" />
+          <Volume2 className="h-5 w-5" />
         </span>
         <span className="call-control-label">
-          {t(language, "conversationControl")}
+          {t(language, "audioMixerControl")}
         </span>
       </button>
+
+      <div className="conversation-mode-menu-wrap" data-conversation-mode-menu-root>
+        <button
+          ref={dockConversationModeButtonRef}
+          type="button"
+          aria-controls="conversation-mode-menu-dock"
+          aria-expanded={showConversationModeMenu}
+          aria-haspopup="menu"
+          aria-label={t(language, "openConversationModes")}
+          onClick={() => handleConversationModeMenuToggle("dock")}
+          className={`call-control-button ${
+            (showConversationModeMenu &&
+              conversationModeMenuPlacement === "dock") ||
+            conversationDisplayMode !== "hidden" ||
+            isCaptionPipOpen
+              ? "is-active"
+              : ""
+          }`}
+        >
+          <span className="call-control-icon" aria-hidden="true">
+            <MessageSquare className="h-5 w-5" />
+          </span>
+          <span className="call-control-label">
+            {t(language, "conversationControl")}
+          </span>
+        </button>
+      </div>
 
       <button
         type="button"
         aria-label={t(language, "leaveCall")}
-        onClick={handleLeaveCall}
+        aria-controls="leave-confirmation-modal"
+        aria-expanded={showLeaveConfirmation}
+        aria-haspopup="dialog"
+        onClick={requestLeaveConfirmation}
         className="call-control-button call-control-leave"
       >
         <span className="call-control-icon" aria-hidden="true">
@@ -3466,113 +5598,28 @@ export function CallRoom({ roomId }: { roomId: string }) {
         </span>
         <span className="call-control-label">{t(language, "leaveControl")}</span>
       </button>
-    </section>
+      </section>
+      {volumeMixer}
+    </div>
   ) : null;
 
-  const connectionPathRows = remoteList.map((participant) => {
-    return (
-      connectionPathSnapshots[participant.participantId] ?? {
-        displayName: participant.displayName,
-        participantId: participant.participantId,
-        path: "unknown" as const,
-        updatedAt: 0,
-      }
-    );
-  });
-  const connectionPathSummary = summarizeConnectionPath(
-    connectionPathRows,
-    remoteList.length,
+  const connectionPathRows = useMemo(
+    () =>
+      remoteList.map(
+        (participant) =>
+          connectionPathSnapshots[participant.participantId] ?? {
+            displayName: participant.displayName,
+            participantId: participant.participantId,
+            path: "unknown" as const,
+            updatedAt: 0,
+          },
+      ),
+    [connectionPathSnapshots, remoteList],
   );
-
-  const connectionPathPanel = language ? (
-    <section className="settings-modal-section connection-path-panel">
-      <div className="flex items-start gap-3">
-        <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-          <TowerControl className="h-5 w-5" aria-hidden="true" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="garden-text-ink text-base font-black">
-              {t(language, "connectionPathTitle")}
-            </h2>
-            <span className={`connection-path-pill is-${connectionPathSummary}`}>
-              {connectionPathLabel(language, connectionPathSummary)}
-            </span>
-          </div>
-          <p className="garden-muted mt-1 text-sm font-bold leading-snug">
-            {t(language, "connectionPathHelp")}
-          </p>
-
-          <div className="connection-path-list">
-            {connectionPathRows.length > 0 ? (
-              connectionPathRows.map((snapshot) => (
-                <div
-                  className="connection-path-row"
-                  key={snapshot.participantId}
-                >
-                  <span className="connection-path-peer">
-                    {snapshot.displayName}
-                  </span>
-                  <span className={`connection-path-pill is-${snapshot.path}`}>
-                    {connectionPathLabel(language, snapshot.path)}
-                  </span>
-                  {snapshot.roundTripMs !== undefined ? (
-                    <span className="connection-path-rtt">
-                      {t(language, "connectionPathRoundTrip")}{" "}
-                      {snapshot.roundTripMs} ms
-                    </span>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <p className="connection-path-empty">
-                {t(language, "connectionPathNoPeers")}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  ) : null;
-
-  const turnRelayPanel = canManageTurnRelay && language ? (
-    <section className="settings-modal-section turn-relay-panel">
-      <div className="flex items-start gap-3">
-        <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-          <TowerControl className="h-5 w-5" aria-hidden="true" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="garden-text-ink text-base font-black">
-              {t(language, "turnRelayTitle")}
-            </h2>
-            <span
-              className={`turn-relay-pill ${
-                turnRelayReady ? "is-ready" : turnStatus?.phase === "error" ? "is-error" : ""
-              }`}
-            >
-              {turnStatusLabel(language, turnStatus)}
-            </span>
-          </div>
-          <p className="garden-muted mt-1 text-sm font-bold leading-snug">
-            {turnRelayReady
-              ? t(language, "turnRelayReadyHelp")
-              : t(language, "turnRelayHelp")}
-          </p>
-          {turnStatus?.provider ? (
-            <p className="garden-muted mt-2 truncate text-xs font-black">
-              {turnStatus.provider}
-            </p>
-          ) : null}
-          {turnStatus?.host ? (
-            <p className="garden-muted mt-1 truncate text-xs font-black">
-              {turnStatus.host}
-            </p>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  ) : null;
+  const connectionPathSummary = useMemo(
+    () => summarizeConnectionPath(connectionPathRows, remoteList.length),
+    [connectionPathRows, remoteList.length],
+  );
 
   if (!language) {
     return <LanguageGate onSelect={handleLanguageSelect} />;
@@ -3593,7 +5640,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       className={`sakura-home call-room-scene garden-scene safe-bottom min-h-dvh px-4 py-4 sm:px-6 lg:px-8 ${
         callState === "idle" ? "" : "call-scene-active"
       } ${
-        callState !== "idle" && !isConversationVisible
+        callState !== "idle" && conversationDisplayMode === "hidden"
           ? "is-conversation-hidden"
           : ""
       }`}
@@ -3602,11 +5649,21 @@ export function CallRoom({ roomId }: { roomId: string }) {
         <audio
           key={participant.participantId}
           data-participant-id={participant.participantId}
-          ref={(element) => attachStreamToAudio(element, participant.audioStream)}
+          ref={(element) =>
+            attachStreamToAudio(
+              element,
+              participant.audioStream,
+              (remoteVolumes[participant.participantId] ?? 1) *
+                masterOutputVolume,
+              isDeafened,
+            )
+          }
           autoPlay
           playsInline
         />
       ))}
+      <audio ref={selfMonitorAudioRef} autoPlay playsInline />
+      {conversationModeMenuPortal}
 
       {showSubtitleNotice && language ? (
         <div className="pointer-events-none fixed inset-x-0 top-0 z-40 px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:px-6 lg:px-8">
@@ -3813,15 +5870,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
                       onClick={handleToggleCamera}
                       disabled={isPreparingMedia}
                       className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
-                        !startWithCameraOff || isCameraEnabled ? "is-on" : "is-off"
+                        isSetupCameraOn ? "is-on" : "is-off"
                       }`}
                     >
-                      {!startWithCameraOff || isCameraEnabled ? (
+                      {isSetupCameraOn ? (
                         <Camera className="h-5 w-5" aria-hidden="true" />
                       ) : (
                         <CameraOff className="h-5 w-5" aria-hidden="true" />
                       )}
-                      {!startWithCameraOff || isCameraEnabled
+                      {isSetupCameraOn
                         ? t(language, "startCameraOn")
                         : t(language, "startCameraOff")}
                     </button>
@@ -3859,7 +5916,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
             <>
               <div
                 className={`active-call-workspace ${
-                  isConversationVisible ? "" : "is-conversation-hidden"
+                  conversationDisplayMode === "hidden"
+                    ? "is-conversation-hidden"
+                    : conversationDisplayMode === "overlay"
+                      ? "is-conversation-overlay"
+                      : ""
                 }`}
               >
                 <div className="active-media-column">
@@ -3870,9 +5931,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
                       surfaces={orderedSurfaces}
                       dominantSurfaceId={dominantSurface}
                       onFullscreenSurface={handleEnterFullscreen}
-                      onSelectSurface={(surfaceId, slot) =>
-                        handleOpenSurfacePicker(surfaceId, slot)
-                      }
+                      onSelectSurface={handleOpenSurfacePicker}
                     />
                   )}
 
@@ -3892,19 +5951,47 @@ export function CallRoom({ roomId }: { roomId: string }) {
                   ) : null}
                 </div>
 
-                {isConversationVisible ? (
-                  <ConversationPanel
-                    language={language}
-                    localCaptionLog={localCaptionLog}
-                    localFinalCaption={localFinalCaption}
-                    localName={displayName}
-                    localPartialCaption={localPartialCaption}
-                    remoteCaptionLog={remoteCaptionLog}
-                    remoteFinalCaption={null}
-                    remoteName={t(language, "participants")}
-                    remotePartialCaption={null}
-                    speakerNames={captionSpeakerNames}
-                  />
+                {conversationDisplayMode !== "hidden" ? (
+                  <aside
+                    ref={conversationOverlayRef}
+                    className={`call-conversation-panel is-${conversationDisplayMode} ${
+                      conversationDisplayMode === "overlay" ? "is-draggable" : ""
+                    }`}
+                    aria-label={t(language, "conversation")}
+                    style={
+                      conversationDisplayMode === "overlay"
+                        ? {
+                            transform: `translate3d(${conversationOverlayOffset.x}px, ${conversationOverlayOffset.y}px, 0)`,
+                          }
+                        : undefined
+                    }
+                  >
+                    {conversationDisplayMode === "overlay" ? (
+                      <button
+                        type="button"
+                        aria-label={t(language, "conversation")}
+                        className="conversation-overlay-drag-handle"
+                        onPointerCancel={handleConversationOverlayDragEnd}
+                        onPointerDown={handleConversationOverlayDragStart}
+                        onPointerMove={handleConversationOverlayDragMove}
+                        onPointerUp={handleConversationOverlayDragEnd}
+                      >
+                        <span aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    <ConversationPanel
+                      language={language}
+                      localCaptionLog={localCaptionLog}
+                      localFinalCaption={localFinalCaption}
+                      localName={displayName}
+                      localPartialCaption={localPartialCaption}
+                      remoteCaptionLog={remoteCaptionLog}
+                      remoteFinalCaption={null}
+                      remoteName={t(language, "participants")}
+                      remotePartialCaption={null}
+                      speakerNames={captionSpeakerNames}
+                    />
+                  </aside>
                 ) : null}
               </div>
 
@@ -3921,6 +6008,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
             fullscreenSurfaceKind === "screen"
               ? "is-screen-share-fullscreen"
               : "is-participant-fullscreen"
+          } is-conversation-${fullscreenConversationMode} ${
+            isFullscreenBottomBarVisible
+              ? "is-bottom-bar-visible"
+              : "is-bottom-bar-hidden"
           }`}
           aria-label={t(language, "fullscreenSurface")}
         >
@@ -3930,597 +6021,212 @@ export function CallRoom({ roomId }: { roomId: string }) {
               layoutMode="focus"
               surfaces={orderedSurfaces}
               dominantSurfaceId={fullscreenSurface}
-              onSelectSurface={(surfaceId, slot) =>
-                handleOpenSurfacePicker(surfaceId, slot, "fullscreen")
-              }
+              onSelectSurface={handleOpenFullscreenSurfacePicker}
             />
+            {fullscreenHasBottomBar ? (
+              <button
+                type="button"
+                aria-expanded={isFullscreenBottomBarVisible}
+                aria-label={
+                  isFullscreenBottomBarVisible
+                    ? t(language, "hideFullscreenBottomBar")
+                    : t(language, "showFullscreenBottomBar")
+                }
+                onClick={() =>
+                  setIsFullscreenBottomBarVisible((current) => !current)
+                }
+                className={`media-fullscreen-bottom-toggle ${
+                  isFullscreenBottomBarVisible ? "is-open" : "is-closed"
+                }`}
+              >
+                {isFullscreenBottomBarVisible ? (
+                  <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                )}
+                <span>
+                  {isFullscreenBottomBarVisible
+                    ? t(language, "hideFullscreenBottomBar")
+                    : t(language, "showFullscreenBottomBar")}
+                </span>
+              </button>
+            ) : null}
           </div>
-          <div className="media-fullscreen-topbar">
+          <div
+            className={`media-fullscreen-topbar ${
+              isFullscreenToolbarOpen ? "is-open" : "is-collapsed"
+            }`}
+          >
             <button
               type="button"
-              aria-label={t(language, "exitFullscreen")}
-              onClick={handleExitFullscreen}
-              className="media-fullscreen-control media-fullscreen-control-exit"
+              aria-expanded={isFullscreenToolbarOpen}
+              aria-label={
+                isFullscreenToolbarOpen
+                  ? t(language, "hideFullscreenToolbar")
+                  : t(language, "showFullscreenToolbar")
+              }
+              onClick={() => setIsFullscreenToolbarOpen((current) => !current)}
+              className="media-fullscreen-toolbar-toggle"
             >
-              <X className="h-4 w-4" aria-hidden="true" />
-              <span>{t(language, "exitFullscreen")}</span>
+              {isFullscreenToolbarOpen ? (
+                <PanelTopClose className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <PanelTopOpen className="h-4 w-4" aria-hidden="true" />
+              )}
+              <span>
+                {isFullscreenToolbarOpen
+                  ? t(language, "hideFullscreenToolbar")
+                  : t(language, "showFullscreenToolbar")}
+              </span>
             </button>
+            <div
+              className="conversation-mode-menu-wrap media-fullscreen-conversation-menu"
+              data-conversation-mode-menu-root
+            >
+              <button
+                ref={fullscreenConversationModeButtonRef}
+                type="button"
+                aria-controls="conversation-mode-menu-fullscreen"
+                aria-expanded={showConversationModeMenu}
+                aria-haspopup="menu"
+                aria-label={t(language, "openConversationModes")}
+                onClick={() => handleConversationModeMenuToggle("fullscreen")}
+                className={`media-fullscreen-control media-fullscreen-chat-button ${
+                  (showConversationModeMenu &&
+                    conversationModeMenuPlacement === "fullscreen") ||
+                  conversationDisplayMode !== "hidden" ||
+                  isCaptionPipOpen
+                    ? "is-selected"
+                    : ""
+                }`}
+              >
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                <span>{t(language, "conversationControl")}</span>
+              </button>
+            </div>
+            {isFullscreenToolbarOpen ? (
+              <div className="media-fullscreen-toolbar-panel">
+                <button
+                  type="button"
+                  aria-label={t(language, "exitFullscreen")}
+                  onClick={handleExitFullscreen}
+                  className="media-fullscreen-control media-fullscreen-control-exit"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  <span>{t(language, "exitFullscreen")}</span>
+                </button>
+              </div>
+            ) : null}
           </div>
-          <aside
-            className="media-fullscreen-conversation"
-            aria-label={t(language, "fullscreenConversation")}
-          >
-            <ConversationPanel
-              language={language}
-              localCaptionLog={localCaptionLog}
-              localFinalCaption={localFinalCaption}
-              localName={displayName}
-              localPartialCaption={localPartialCaption}
-              remoteCaptionLog={remoteCaptionLog}
-              remoteFinalCaption={null}
-              remoteName={t(language, "participants")}
-              remotePartialCaption={null}
-              speakerNames={captionSpeakerNames}
-            />
-          </aside>
+          {fullscreenConversationMode !== "hidden" ? (
+            <aside
+              ref={fullscreenConversationRef}
+              className={`media-fullscreen-conversation ${
+                fullscreenConversationMode === "overlay" ? "is-draggable" : ""
+              }`}
+              aria-label={t(language, "fullscreenConversation")}
+              style={
+                fullscreenConversationMode === "overlay"
+                  ? {
+                      transform: `translate3d(${fullscreenConversationOffset.x}px, ${fullscreenConversationOffset.y}px, 0)`,
+                    }
+                  : undefined
+              }
+            >
+              {fullscreenConversationMode === "overlay" ? (
+                <button
+                  type="button"
+                  aria-label={t(language, "fullscreenConversation")}
+                  className="media-fullscreen-conversation-drag-handle"
+                  onPointerCancel={handleFullscreenConversationDragEnd}
+                  onPointerDown={handleFullscreenConversationDragStart}
+                  onPointerMove={handleFullscreenConversationDragMove}
+                  onPointerUp={handleFullscreenConversationDragEnd}
+                >
+                  <span aria-hidden="true" />
+                </button>
+              ) : null}
+              <ConversationPanel
+                language={language}
+                localCaptionLog={localCaptionLog}
+                localFinalCaption={localFinalCaption}
+                localName={displayName}
+                localPartialCaption={localPartialCaption}
+                remoteCaptionLog={remoteCaptionLog}
+                remoteFinalCaption={null}
+                remoteName={t(language, "participants")}
+                remotePartialCaption={null}
+                speakerNames={captionSpeakerNames}
+              />
+            </aside>
+          ) : null}
         </section>
       ) : null}
 
-      {surfacePickerTarget && language ? (
-        <div
-          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
-          onClick={() => setSurfacePickerTarget(null)}
-        >
-          <section
-            aria-labelledby="surface-picker-modal-title"
-            aria-modal="true"
-            className="settings-modal surface-picker-modal max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-hidden"
-            role="dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-ribbon" aria-hidden="true" />
-            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
-              <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <LayoutGrid
-                    className="garden-icon-blush h-4 w-4"
-                    aria-hidden="true"
-                  />
-                  {t(language, "viewControl")}
-                </p>
-                <h2
-                  className="garden-title mt-2 text-2xl"
-                  id="surface-picker-modal-title"
-                >
-                  {t(language, surfacePickerTitleKey)}
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label={t(language, "closeLayoutPicker")}
-                onClick={() => setSurfacePickerTarget(null)}
-                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
-              >
-                <X className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </header>
-
-            <div className="surface-picker-options grid gap-3 px-5 pb-5">
-              {orderedSurfaces.map((surface) => {
-                const Icon = surface.kind === "screen" ? ScreenShare : Camera;
-                const isCurrentSurface = surface.id === surfacePickerSelectedId;
-                const surfaceStatus =
-                  surface.status ||
-                  t(
-                    language,
-                    surface.kind === "screen" ? "shareControl" : "cameraControl",
-                  );
-
-                return (
-                  <button
-                    key={surface.id}
-                    type="button"
-                    onClick={() => handleSelectSurfaceForTarget(surface.id)}
-                    className={`view-layout-option surface-picker-option ${
-                      isCurrentSurface ? "is-selected" : ""
-                    }`}
-                  >
-                    <span
-                      className={`surface-picker-preview is-${surface.kind}`}
-                      aria-hidden="true"
-                    >
-                      <Icon className="h-5 w-5" aria-hidden="true" />
-                    </span>
-                    <span className="view-layout-option-copy surface-picker-option-copy">
-                      <span>{surface.label}</span>
-                      <small>
-                        {isCurrentSurface
-                          ? t(language, "selected")
-                          : surfaceStatus}
-                      </small>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {showLayoutPicker && language ? (
-        <div
-          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
-          onClick={() => setShowLayoutPicker(false)}
-        >
-          <section
-            aria-labelledby="view-layout-modal-title"
-            aria-modal="true"
-            className="settings-modal view-layout-modal max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-hidden"
-            role="dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-ribbon" aria-hidden="true" />
-            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
-              <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <LayoutGrid
-                    className="garden-icon-blush h-4 w-4"
-                    aria-hidden="true"
-                  />
-                  {t(language, "viewControl")}
-                </p>
-                <h2
-                  className="garden-title mt-2 text-2xl"
-                  id="view-layout-modal-title"
-                >
-                  {t(language, "viewLayout")}
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label={t(language, "closeSettings")}
-                onClick={() => setShowLayoutPicker(false)}
-                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
-              >
-                <X className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </header>
-
-            <div className="view-layout-options grid gap-3 px-5 pb-5">
-              {mediaLayoutModes.map((mode) => {
-                const isSelected = mode === mediaLayoutMode;
-
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => handleMediaLayoutModeChange(mode)}
-                    className={`view-layout-option ${
-                      isSelected ? "is-selected" : ""
-                    }`}
-                  >
-                    <span className={`view-layout-preview is-${mode}`} aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span className="view-layout-option-copy">
-                      <span>{t(language, mediaLayoutModeTranslationKeys[mode])}</span>
-                      {isSelected ? <small>{t(language, "selected")}</small> : null}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {showSettings ? (
-        <div
-          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
-          onClick={() => setShowSettings(false)}
-        >
-          <section
-            aria-labelledby="call-settings-modal-title"
-            aria-modal="true"
-            className="settings-modal max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-hidden"
-            role="dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-modal-ribbon" aria-hidden="true" />
-            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
-              <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <Flower2
-                    className="garden-icon-blush h-4 w-4"
-                    aria-hidden="true"
-                  />
-                  {t(language, "appName")}
-                </p>
-                <h2
-                  className="garden-title mt-2 text-2xl"
-                  id="call-settings-modal-title"
-                >
-                  {t(language, "settings")}
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label={t(language, "closeSettings")}
-                onClick={() => setShowSettings(false)}
-                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
-              >
-                <X className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </header>
-
-            <div className="settings-modal-content grid gap-4 px-5 pb-5">
-              {hostRoomCode ? (
-                <section className="settings-modal-section settings-room-code-section">
-                  <div className="flex items-start gap-3">
-                    <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-                      <Copy className="h-5 w-5" aria-hidden="true" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="garden-text-muted text-sm font-black">
-                        {t(language, "roomCode")}
-                      </p>
-                      <button
-                        type="button"
-                        aria-label={
-                          isCodeCopied
-                            ? t(language, "copied")
-                            : t(language, "copyRoomCode")
-                        }
-                        onClick={handleCopyCode}
-                        className="garden-button garden-button-quiet settings-room-code-button mt-3 h-14 w-full gap-2 px-4 text-2xl"
-                      >
-                        <Copy className="h-5 w-5 shrink-0" aria-hidden="true" />
-                        <span className="font-black">{hostRoomCode}</span>
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              ) : null}
-
-              <section className="settings-modal-section">
-                <p className="garden-text-muted text-sm font-black">
-                  {t(language, "changeLanguage")}
-                </p>
-                <select
-                  value={language}
-                  onChange={(event) => {
-                    const nextLanguage = event.target.value;
-
-                    if (isSupportedLanguage(nextLanguage)) {
-                      handleLanguageSelect(nextLanguage);
-                    }
-                  }}
-                  className="garden-select settings-language-select"
-                >
-                  {supportedLanguageOptions.map(({ code, label }) => (
-                    <option key={code} value={code}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </section>
-
-              <section className="settings-modal-section">
-                <p className="garden-text-muted text-sm font-black">
-                  {t(language, "captionPrivacyTitle")}
-                </p>
-                <p className="garden-muted mt-2 text-sm font-bold leading-snug">
-                  {t(language, "captionPrivacyBody")}
-                </p>
-              </section>
-
-              {connectionPathPanel}
-              {turnRelayPanel}
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {showScreenShareSettings && language ? (
-        <div
-          className="screen-quality-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
-          onClick={closeScreenShareSettings}
-        >
-          <section
-            aria-labelledby="screen-quality-modal-title"
-            aria-modal="true"
-            className="screen-quality-modal w-full max-w-2xl overflow-hidden"
-            role="dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="screen-quality-modal-header">
-              <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-                  {t(language, "screenQualityKicker")}
-                </p>
-                <h2
-                  id="screen-quality-modal-title"
-                  className="garden-title mt-1 text-2xl"
-                >
-                  {isScreenSharing
-                    ? t(language, "screenQualityLiveTitle")
-                    : t(language, "screenQualityTitle")}
-                </h2>
-              </div>
-              <button
-                type="button"
-                aria-label={t(language, "closeScreenQuality")}
-                onClick={closeScreenShareSettings}
-                className="garden-icon-button grid h-10 w-10 place-items-center rounded-full"
-              >
-                <X className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </header>
-
-            <div className="screen-quality-content">
-              <p className="screen-quality-help">
-                {isScreenSharing
-                  ? t(language, "screenQualityLiveHelp")
-                  : t(language, "screenQualityHelp")}
-              </p>
-
-              <section className="screen-quality-section">
-                <h3>{t(language, "screenQualityPreset")}</h3>
-                <div className="screen-quality-presets">
-                  {screenSharePresetIds.map((presetId) => (
-                    <button
-                      key={presetId}
-                      type="button"
-                      onClick={() => handleSelectScreenSharePreset(presetId)}
-                      className={`screen-quality-preset ${
-                        screenShareQuality.presetId === presetId
-                          ? "is-selected"
-                          : ""
-                      }`}
-                    >
-                      <span>{screenSharePresetLabel(language, presetId)}</span>
-                      <small>{screenSharePresetHelp(language, presetId)}</small>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="screen-quality-section">
-                <h3>{t(language, "screenQualityManual")}</h3>
-                <div className="screen-quality-fields">
-                  <label className="screen-quality-field">
-                    <span>{t(language, "screenQualityResolution")}</span>
-                    <select
-                      value={selectedScreenResolution}
-                      onChange={(event) =>
-                        handleScreenShareResolutionChange(event.target.value)
-                      }
-                      className="screen-quality-input"
-                    >
-                      {screenShareResolutionOptions.map((option) => (
-                        <option
-                          key={`${option.width}x${option.height}`}
-                          value={`${option.width}x${option.height}`}
-                        >
-                          {option.label} ({option.width}x{option.height})
-                        </option>
-                      ))}
-                      <option value="custom">
-                        {t(language, "screenQualityCustom")}
-                      </option>
-                    </select>
-                  </label>
-
-                  <label className="screen-quality-field">
-                    <span>{t(language, "screenQualityWidth")}</span>
-                    <input
-                      type="number"
-                      min={640}
-                      max={3840}
-                      step={160}
-                      value={screenShareQuality.width}
-                      onChange={(event) =>
-                        handleScreenShareNumberChange("width", event.target.value)
-                      }
-                      className="screen-quality-input"
-                    />
-                  </label>
-
-                  <label className="screen-quality-field">
-                    <span>{t(language, "screenQualityHeight")}</span>
-                    <input
-                      type="number"
-                      min={360}
-                      max={2160}
-                      step={90}
-                      value={screenShareQuality.height}
-                      onChange={(event) =>
-                        handleScreenShareNumberChange("height", event.target.value)
-                      }
-                      className="screen-quality-input"
-                    />
-                  </label>
-
-                  <label className="screen-quality-field">
-                    <span>{t(language, "screenQualityFrameRate")}</span>
-                    <input
-                      type="number"
-                      min={5}
-                      max={60}
-                      step={1}
-                      value={screenShareQuality.frameRate}
-                      onChange={(event) =>
-                        handleScreenShareNumberChange(
-                          "frameRate",
-                          event.target.value,
-                        )
-                      }
-                      className="screen-quality-input"
-                    />
-                  </label>
-
-                  <label className="screen-quality-field">
-                    <span>{t(language, "screenQualityBitrate")}</span>
-                    <input
-                      type="number"
-                      min={500}
-                      max={30000}
-                      step={500}
-                      value={screenShareQuality.bitrateKbps}
-                      onChange={(event) =>
-                        handleScreenShareNumberChange(
-                          "bitrateKbps",
-                          event.target.value,
-                        )
-                      }
-                      className="screen-quality-input"
-                    />
-                  </label>
-                </div>
-              </section>
-
-              <section className="screen-quality-section">
-                <h3>{t(language, "screenQualityOptimizeFor")}</h3>
-                <div className="screen-quality-segment">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateScreenShareQuality({ optimization: "detail" })
-                    }
-                    className={
-                      screenShareQuality.optimization === "detail"
-                        ? "is-selected"
-                        : ""
-                    }
-                  >
-                    {t(language, "screenQualityOptimizeDetail")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateScreenShareQuality({ optimization: "motion" })
-                    }
-                    className={
-                      screenShareQuality.optimization === "motion"
-                        ? "is-selected"
-                        : ""
-                    }
-                  >
-                    {t(language, "screenQualityOptimizeMotion")}
-                  </button>
-                </div>
-
-                <label className="screen-quality-toggle">
-                  <input
-                    type="checkbox"
-                    checked={screenShareQuality.prioritizeScreen}
-                    onChange={(event) =>
-                      updateScreenShareQuality({
-                        prioritizeScreen: event.target.checked,
-                      })
-                    }
-                  />
-                  <span>
-                    <strong>{t(language, "screenQualityPrioritizeScreen")}</strong>
-                    <small>
-                      {t(language, "screenQualityPrioritizeScreenHelp")}
-                    </small>
-                  </span>
-                </label>
-              </section>
-
-              {isScreenSharing ? (
-                <section className="screen-quality-section screen-quality-stats">
-                  <h3>{t(language, "screenQualityActual")}</h3>
-                  {screenShareStats ? (
-                    <dl>
-                      <div>
-                        <dt>{t(language, "screenQualityResolution")}</dt>
-                        <dd>
-                          {screenShareStats.width && screenShareStats.height
-                            ? `${screenShareStats.width}x${screenShareStats.height}`
-                            : "-"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t(language, "screenQualityFrameRate")}</dt>
-                        <dd>
-                          {screenShareStats.fps
-                            ? `${Math.round(screenShareStats.fps)} ${t(
-                                language,
-                                "screenQualityFpsUnit",
-                              )}`
-                            : "-"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t(language, "screenQualityBitrate")}</dt>
-                        <dd>
-                          {screenShareStats.bitrateKbps
-                            ? `${screenShareStats.bitrateKbps} ${t(
-                                language,
-                                "screenQualityKbps",
-                              )}`
-                            : "-"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t(language, "screenQualityPath")}</dt>
-                        <dd>
-                          {screenShareStats.path === "relay"
-                            ? t(language, "screenQualityRelay")
-                            : screenShareStats.path === "direct"
-                              ? t(language, "screenQualityDirect")
-                              : t(language, "screenQualityUnknownPath")}
-                          {screenShareStats.roundTripMs
-                            ? ` / ${screenShareStats.roundTripMs} ms`
-                            : ""}
-                        </dd>
-                      </div>
-                    </dl>
-                  ) : (
-                    <p>{t(language, "screenQualityWaitingStats")}</p>
-                  )}
-                </section>
-              ) : (
-                <p className="screen-quality-notice">
-                  {t(language, "screenQuality4kNotice")}
-                </p>
-              )}
-
-              <div className="screen-quality-actions">
-                <button
-                  type="button"
-                  onClick={closeScreenShareSettings}
-                  className="garden-button garden-button-quiet h-12 px-4 text-base"
-                >
-                  {t(language, "screenQualityCancel")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void (isScreenSharing
-                      ? handleApplyScreenShareQuality()
-                      : handleStartScreenShareFromSettings())
-                  }
-                  disabled={isApplyingScreenQuality}
-                  className="garden-button garden-button-primary h-12 px-4 text-base"
-                >
-                  {isApplyingScreenQuality
-                    ? t(language, "screenQualityApplying")
-                    : isScreenSharing
-                      ? t(language, "screenQualityApply")
-                      : t(language, "screenQualityStart")}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <CallRoomModals
+        callState={callState}
+        canManageTurnRelay={canManageTurnRelay}
+        connectionPathRows={connectionPathRows}
+        connectionPathSummary={connectionPathSummary}
+        hostRoomCode={hostRoomCode}
+        isApplyingScreenQuality={isApplyingScreenQuality}
+        isCodeCopied={isCodeCopied}
+        isPreparingMedia={isPreparingMedia}
+        isReplacingMicrophone={isReplacingMicrophone}
+        isScreenSharing={isScreenSharing}
+        isTestingMicrophone={isTestingMicrophone}
+        language={language}
+        localInputVolume={localInputVolume}
+        masterOutputVolume={masterOutputVolume}
+        mediaLayoutMode={mediaLayoutMode}
+        microphoneDevices={microphoneDevices}
+        onApplyScreenShareQuality={() => void handleApplyScreenShareQuality()}
+        onCloseLayoutPicker={() => setShowLayoutPicker(false)}
+        onCloseLeaveConfirmation={() => setShowLeaveConfirmation(false)}
+        onCloseScreenShareSettings={closeScreenShareSettings}
+        onCloseSettings={() => setShowSettings(false)}
+        onCloseSurfacePicker={() => setSurfacePickerTarget(null)}
+        onCloseVoiceSettings={closeVoiceSettings}
+        onCopyCode={handleCopyCode}
+        onLanguageSelect={handleLanguageSelect}
+        onLeaveCall={handleLeaveCall}
+        onLocalInputVolumeChange={handleLocalInputVolumeChange}
+        onMasterOutputVolumeChange={handleMasterOutputVolumeChange}
+        onMediaLayoutModeChange={handleMediaLayoutModeChange}
+        onMicrophoneDeviceChange={(deviceId) => {
+          void handleMicrophoneDeviceChange(deviceId);
+        }}
+        onOpenVoiceSettings={openVoiceSettings}
+        onRemoteVolumeChange={handleRemoteVolumeChange}
+        onScreenShareNumberChange={handleScreenShareNumberChange}
+        onScreenShareResolutionChange={handleScreenShareResolutionChange}
+        onSelectScreenSharePreset={handleSelectScreenSharePreset}
+        onSelectSurface={handleSelectSurfaceForTarget}
+        onStartMicrophoneTest={() => void startMicrophoneTest()}
+        onStartScreenShareFromSettings={() => void handleStartScreenShareFromSettings()}
+        onThemeChange={handleThemeChange}
+        onUpdateScreenShareQuality={updateScreenShareQuality}
+        onVoiceSettingChange={handleVoiceSettingChange}
+        orderedSurfaces={orderedSurfaces}
+        remoteParticipants={remoteList}
+        remoteVolumes={remoteVolumes}
+        screenShareQuality={screenShareQuality}
+        screenShareStats={screenShareStats}
+        selectedMicrophoneDeviceId={selectedMicrophoneDeviceId}
+        selectedScreenResolution={selectedScreenResolution}
+        showLayoutPicker={showLayoutPicker}
+        showLeaveConfirmation={showLeaveConfirmation}
+        showScreenShareSettings={showScreenShareSettings}
+        showSettings={showSettings}
+        showVoiceSettings={showVoiceSettings}
+        surfacePickerSelectedId={surfacePickerSelectedId}
+        surfacePickerTarget={surfacePickerTarget}
+        surfacePickerTitleKey={surfacePickerTitleKey}
+        theme={theme}
+        turnRelayReady={turnRelayReady}
+        turnStatus={turnStatus}
+        voiceSettings={voiceSettings}
+      />
 
     </main>
   );

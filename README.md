@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Audio, video, one-at-a-time screen sharing, and optional live translated captions for invited participants.
+  Audio, video, one-at-a-time screen sharing, and host-controlled live translated captions for invited participants.
 </p>
 
 ## Overview
@@ -23,7 +23,7 @@ The product surface is intentionally small:
 - 4-digit room code join flow.
 - Audio calls, video calls, and one-at-a-time screen sharing.
 - Conversation and captions panel visible throughout the meeting UI.
-- Optional live captions with transcription and translation.
+- Host-controlled live captions with transcription and translation.
 - Peer-to-peer WebRTC media first, with managed TURN fallback when needed.
 - No invite links, public room directory, user accounts, queues, public meeting features, or always-on service assumptions.
 
@@ -64,12 +64,12 @@ The meeting settings modal includes a live connection path panel. It polls WebRT
 
 Audio, video, and screen sharing use encrypted WebRTC media transport between participating browsers. In group calls, media is not mixed by the server. When TURN is used, Cloudflare forwards encrypted WebRTC packets, but the relay can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
 
-Captions and translations are optional and use a different path. When a browser enables captions, that browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then sends translated text to connected recipients and a preview back to the speaker.
+Captions and translations use a different path. When the host starts captions, each joined browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then sends translated text to connected recipients and a preview back to the speaker.
 
 Important boundaries:
 
 - Remote audio is not transcribed from another participant's browser.
-- Each browser must accept the captions privacy notice before sending microphone audio for captions.
+- Captions are host-controlled for this private on-demand room. Each browser sends only its own microphone chunks while the caption service is running.
 - Caption audio is processed by this server and OpenAI, so captions are not end-to-end encrypted.
 - Room state is stored in memory only and disappears when the server stops.
 - Room codes are not placed in URLs or localStorage.
@@ -209,7 +209,7 @@ The normal call flow is:
 9. Participants allow the needed media permissions.
 10. The room admits up to 6 participants.
 11. The host starts captions if needed.
-12. Each browser accepts the captions privacy notice before its own microphone audio is sent for transcription.
+12. While captions are running, each joined browser sends its own microphone chunks for transcription and translation.
 
 Group calls use a peer-to-peer mesh, so each additional participant increases browser CPU and bandwidth usage.
 
