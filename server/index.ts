@@ -8,6 +8,7 @@ import { parseCookies } from "./cookies";
 import { enforceMutationOrigin } from "./origin";
 import { createSignalingServer } from "./signaling";
 import {
+  ActiveRoomExistsError,
   createRoom,
   creatorCookieName,
   getRoom,
@@ -15,7 +16,8 @@ import {
   isCreatorSecret,
   isRoomParticipantSession,
   maxRoomParticipants,
-  roomExists
+  roomExists,
+  type Room
 } from "./rooms";
 import {
   getCloudflareTurnIceServers,
@@ -425,9 +427,25 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       return true;
     }
 
-    const room = createRoom({
-      spokenLanguage: body.spokenLanguage
-    });
+    let room: Room;
+    try {
+      room = createRoom({
+        spokenLanguage: body.spokenLanguage
+      });
+    } catch (error) {
+      if (error instanceof ActiveRoomExistsError) {
+        sendJson(response, 409, {
+          error: "active-room-exists",
+          roomId: error.room.roomId,
+          roomCode: error.room.roomCode,
+          maxParticipants: error.room.maxParticipants
+        });
+        return true;
+      }
+
+      throw error;
+    }
+
     const cookie = `${creatorCookieName(room.roomId)}=${encodeURIComponent(
       room.creatorSecret
     )}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 4}${

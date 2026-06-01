@@ -43,18 +43,20 @@ const rnnoiseOutputLagSamples = 384;
 const levelPublishIntervalMs = 80;
 const meterReferenceRms = 0.18;
 const minimumGateThresholdRms = 0.0045;
-const maximumGateThresholdRms = 0.09;
-const gateClosedMinimumGain = 0.16;
+const maximumGateThresholdRms = 0.06;
+const gateClosedMinimumGain = 0.24;
 const autoChannelSwitchFloorRms = 0.012;
 const autoChannelSwitchRatio = 2.2;
 const autoChannelReturnRatio = 1.55;
 const noiseReductionTransitionSeconds = 0.24;
 const noiseReductionLevelerSettleMs = 280;
 const noiseReductionLevelerGainCeiling = 1.8;
+const maximumNoiseSuppressorWetGain = 0.82;
+const minimumDenoisedDryBedGain = 0.14;
 const defaultProcessingSettings: MicrophoneProcessingSettings = {
   microphoneChannelMode: "auto",
   noiseGate: 0.02,
-  noiseReduction: 0.5,
+  noiseReduction: 0.85,
 };
 
 function clampUnit(value: number) {
@@ -113,7 +115,7 @@ function gateThresholdRmsFromControl(noiseGate: number) {
 
   return (
     minimumGateThresholdRms +
-    Math.pow(gate, 1.45) * (maximumGateThresholdRms - minimumGateThresholdRms)
+    Math.pow(gate, 1.65) * (maximumGateThresholdRms - minimumGateThresholdRms)
   );
 }
 
@@ -518,9 +520,17 @@ export async function createEnhancedMicrophoneStream(
       const suppressionRampTime = noiseReductionChanged
         ? noiseReductionTransitionSeconds
         : rampTime;
-      const wetGain = isDenoising ? Math.min(1, 0.18 + reduction * 0.86) : 0;
+      const wetGain = isDenoising
+        ? Math.min(
+            maximumNoiseSuppressorWetGain,
+            0.16 + Math.pow(reduction, 0.78) * 0.68,
+          )
+        : 0;
       const alignedDryBedGain = isDenoising
-        ? Math.max(0.04, Math.pow(1 - reduction, 2.2) * 0.72)
+        ? Math.max(
+            minimumDenoisedDryBedGain,
+            0.1 + Math.pow(1 - reduction, 1.25) * 0.56,
+          )
         : 0;
       const immediateDryBedGain = isDenoising ? 0 : 1;
 
@@ -625,7 +635,7 @@ export async function createEnhancedMicrophoneStream(
 
       const closedGateGain = Math.max(
         gateClosedMinimumGain,
-        0.44 - processingSettings.noiseGate * 0.28,
+        0.5 - processingSettings.noiseGate * 0.2,
       );
       const targetGateGain = isGateEnabled && !gateIsOpen ? closedGateGain : 1;
       currentGateGain +=

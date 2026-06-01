@@ -301,6 +301,26 @@ type CaptionVideoPipController = {
   stream: MediaStream;
   video: VideoPictureInPictureElement;
 };
+type BoostedAudioPlaybackController = {
+  audioContext: AudioContext;
+  compressor: DynamicsCompressorNode;
+  destination: MediaStreamAudioDestinationNode;
+  gain: GainNode;
+  limiter: DynamicsCompressorNode;
+  source: MediaStreamAudioSourceNode;
+  sourceStream: MediaStream;
+  trackSignature: string;
+};
+type ScreenShareAudioProcessingController = {
+  stream: MediaStream;
+  stop: () => void;
+};
+type ExtendedDisplayMediaOptions = DisplayMediaStreamOptions & {
+  selfBrowserSurface?: "include" | "exclude";
+  surfaceSwitching?: "include" | "exclude";
+  systemAudio?: "include" | "exclude";
+  windowAudio?: "exclude" | "system" | "window";
+};
 
 const captionLogLimit = 80;
 const mediaRequestTimeoutMs = 9000;
@@ -317,14 +337,19 @@ const audioOutputDeviceStorageKey = "sakura.audioOutputDeviceId";
 const microphoneDeviceStorageKey = "sakura.microphoneDeviceId";
 const voiceSettingsStorageKey = "sakura.voiceSettings";
 const noiseReductionCommitDelayMs = 180;
+const boostedAudioPlaybackControllers =
+  new WeakMap<HTMLAudioElement, BoostedAudioPlaybackController>();
 const defaultVoiceSettings: MicrophoneProcessingSettings = {
   microphoneChannelMode: "auto",
   noiseGate: 0.02,
-  noiseReduction: 0.5,
+  noiseReduction: 0.85,
 };
 const defaultLocalInputVolume = 0.5;
-const defaultMasterOutputVolume = 0.5;
-const defaultScreenShareAudioVolume = 0.75;
+const defaultMasterOutputVolume = 1;
+const defaultScreenShareAudioVolume = 1;
+const remoteAudioMaximumOutputGain = 2.4;
+const screenShareAudioMaximumOutputGain = 2.6;
+const screenShareAudioCaptureGain = 1.8;
 type MediaPreparationStep =
   | "idle"
   | "microphone"
@@ -917,28 +942,359 @@ function attachStreamToVideo(video: HTMLVideoElement | null, stream: MediaStream
   }
 }
 
+function getAudioContextConstructor() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return (
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext ??
+    null
+  );
+}
+
+function audioTrackSignature(stream: MediaStream | null) {
+  return (
+    stream
+      ?.getAudioTracks()
+      .map((track) => `${track.id}:${track.readyState}`)
+      .join("|") ?? ""
+  );
+}
+
+function playbackGainFromVolume(volume: number, maximumGain: number) {
+  const clampedVolume = Math.min(1, Math.max(0, volume));
+  const safeMaximumGain = Math.max(1, maximumGain);
+
+  if (clampedVolume <= 0) {
+    return 0;
+  }
+
+  if (clampedVolume <= 0.75) {
+    return clampedVolume / 0.75;
+  }
+
+  return (
+    1 +
+    ((clampedVolume - 0.75) / 0.25) *
+      (safeMaximumGain - 1)
+  );
+}
+
+function releaseBoostedAudioPlayback(audio: HTMLAudioElement) {
+  const controller = boostedAudioPlaybackControllers.get(audio);
+
+  if (!controller) {
+    return;
+  }
+
+  boostedAudioPlaybackControllers.delete(audio);
+  audio.srcObject = null;
+
+  for (const track of controller.destination.stream.getTracks()) {
+    track.stop();
+  }
+
+  controller.source.disconnect();
+  controller.gain.disconnect();
+  controller.compressor.disconnect();
+  controller.limiter.disconnect();
+  void controller.audioContext.close().catch(() => undefined);
+}
+
+function createBoostedAudioPlayback(
+  audio: HTMLAudioElement,
+  stream: MediaStream,
+): BoostedAudioPlaybackController | null {
+  const AudioContextConstructor = getAudioContextConstructor();
+
+  if (!AudioContextConstructor || stream.getAudioTracks().length === 0) {
+    return null;
+  }
+
+  try {
+    const audioContext = new AudioContextConstructor();
+    const source = audioContext.createMediaStreamSource(stream);
+    const gain = audioContext.createGain();
+    const compressor = audioContext.createDynamicsCompressor();
+    const limiter = audioContext.createDynamicsCompressor();
+    const destination = audioContext.createMediaStreamDestination();
+
+    gain.gain.value = 1;
+    compressor.threshold.value = -18;
+    compressor.knee.value = 12;
+    compressor.ratio.value = 2.6;
+    compressor.attack.value = 0.004;
+    compressor.release.value = 0.16;
+    limiter.threshold.value = -1;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.045;
+
+    source.connect(gain).connect(compressor).connect(limiter).connect(destination);
+
+    const controller: BoostedAudioPlaybackController = {
+      audioContext,
+      compressor,
+      destination,
+      gain,
+      limiter,
+      source,
+      sourceStream: stream,
+      trackSignature: audioTrackSignature(stream),
+    };
+
+    boostedAudioPlaybackControllers.set(audio, controller);
+    return controller;
+  } catch {
+    return null;
+  }
+}
+
+function applyBoostedAudioPlayback(
+  audio: HTMLAudioElement,
+  stream: MediaStream,
+  volume: number,
+  maximumGain: number,
+) {
+  const trackSignature = audioTrackSignature(stream);
+  let controller = boostedAudioPlaybackControllers.get(audio) ?? null;
+
+  if (
+    controller &&
+    (controller.sourceStream !== stream ||
+      controller.trackSignature !== trackSignature)
+  ) {
+    releaseBoostedAudioPlayback(audio);
+    controller = null;
+  }
+
+  if (!controller) {
+    controller = createBoostedAudioPlayback(audio, stream);
+  }
+
+  if (!controller) {
+    return false;
+  }
+
+  const gain = playbackGainFromVolume(volume, maximumGain);
+
+  controller.gain.gain.setTargetAtTime(
+    gain,
+    controller.audioContext.currentTime,
+    0.018,
+  );
+  void controller.audioContext.resume().catch(() => undefined);
+
+  if (audio.srcObject !== controller.destination.stream) {
+    audio.srcObject = controller.destination.stream;
+  }
+
+  audio.volume = 1;
+
+  if (controller.audioContext.state === "running") {
+    return true;
+  }
+
+  releaseBoostedAudioPlayback(audio);
+  return false;
+}
+
 function attachStreamToAudio(
   audio: HTMLAudioElement | null,
   stream: MediaStream | null,
   volume = 1,
   muted = false,
   outputDeviceId = "",
+  maximumGain = 1,
 ) {
   if (!audio) {
     return;
   }
 
-  if (audio.srcObject !== stream) {
-    audio.srcObject = stream;
+  const safeVolume = muted ? 0 : Math.min(1, Math.max(0, volume));
+  const shouldBoost =
+    stream !== null &&
+    stream.getAudioTracks().length > 0 &&
+    maximumGain > 1;
+
+  if (
+    !shouldBoost ||
+    !stream ||
+    !applyBoostedAudioPlayback(audio, stream, safeVolume, maximumGain)
+  ) {
+    releaseBoostedAudioPlayback(audio);
+
+    if (audio.srcObject !== stream) {
+      audio.srcObject = stream;
+    }
+
+    audio.volume = safeVolume;
   }
 
   audio.muted = muted;
-  audio.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
   applyAudioOutputDevice(audio, outputDeviceId);
 
   if (stream) {
     void audio.play().catch(() => undefined);
   }
+}
+
+function CallAudioSink({
+  maximumGain,
+  muted,
+  outputDeviceId,
+  participantId,
+  stream,
+  type,
+  volume,
+}: {
+  maximumGain: number;
+  muted: boolean;
+  outputDeviceId: string;
+  participantId: string;
+  stream: MediaStream;
+  type: "participant" | "screen";
+  volume: number;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+
+    return () => {
+      if (audio) {
+        releaseBoostedAudioPlayback(audio);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    attachStreamToAudio(
+      audioRef.current,
+      stream,
+      volume,
+      muted,
+      outputDeviceId,
+      maximumGain,
+    );
+  }, [maximumGain, muted, outputDeviceId, stream, volume]);
+
+  const dataAttributes =
+    type === "screen"
+      ? { "data-screen-audio-participant-id": participantId }
+      : { "data-participant-id": participantId };
+
+  return <audio ref={audioRef} {...dataAttributes} autoPlay playsInline />;
+}
+
+function createProcessedScreenShareAudioStream(
+  rawStream: MediaStream,
+): ScreenShareAudioProcessingController {
+  const rawAudioTracks = rawStream.getAudioTracks();
+
+  if (rawAudioTracks.length === 0) {
+    return {
+      stream: rawStream,
+      stop: () => undefined,
+    };
+  }
+
+  const AudioContextConstructor = getAudioContextConstructor();
+
+  if (!AudioContextConstructor) {
+    return {
+      stream: rawStream,
+      stop: () => undefined,
+    };
+  }
+
+  try {
+    const audioContext = new AudioContextConstructor();
+    const rawAudioStream = new MediaStream(rawAudioTracks);
+    const source = audioContext.createMediaStreamSource(rawAudioStream);
+    const gain = audioContext.createGain();
+    const compressor = audioContext.createDynamicsCompressor();
+    const limiter = audioContext.createDynamicsCompressor();
+    const destination = audioContext.createMediaStreamDestination();
+    const processedAudioTracks = destination.stream.getAudioTracks();
+    const stopProcessedAudioTracks = () => {
+      for (const track of processedAudioTracks) {
+        track.stop();
+      }
+    };
+    const handleRawAudioEnded = () => {
+      if (!rawAudioTracks.some((track) => track.readyState === "live")) {
+        stopProcessedAudioTracks();
+      }
+    };
+
+    gain.gain.value = screenShareAudioCaptureGain;
+    compressor.threshold.value = -20;
+    compressor.knee.value = 14;
+    compressor.ratio.value = 2.4;
+    compressor.attack.value = 0.004;
+    compressor.release.value = 0.18;
+    limiter.threshold.value = -1;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.05;
+
+    source.connect(gain).connect(compressor).connect(limiter).connect(destination);
+
+    for (const track of rawAudioTracks) {
+      track.addEventListener("ended", handleRawAudioEnded);
+    }
+
+    void audioContext.resume().catch(() => undefined);
+
+    return {
+      stream: new MediaStream([
+        ...rawStream.getVideoTracks(),
+        ...processedAudioTracks,
+      ]),
+      stop() {
+        for (const track of rawAudioTracks) {
+          track.removeEventListener("ended", handleRawAudioEnded);
+          track.stop();
+        }
+
+        stopProcessedAudioTracks();
+        source.disconnect();
+        gain.disconnect();
+        compressor.disconnect();
+        limiter.disconnect();
+        void audioContext.close().catch(() => undefined);
+      },
+    };
+  } catch {
+    return {
+      stream: rawStream,
+      stop: () => undefined,
+    };
+  }
+}
+
+function screenShareDisplayMediaOptions(
+  settings: ScreenShareQualitySettings,
+): ExtendedDisplayMediaOptions {
+  return {
+    audio: {
+      autoGainControl: false,
+      channelCount: { ideal: 2 },
+      echoCancellation: false,
+      noiseSuppression: false,
+    },
+    selfBrowserSurface: "include",
+    surfaceSwitching: "include",
+    systemAudio: "include",
+    video: screenShareConstraints(settings),
+    windowAudio: "system",
+  };
 }
 
 type HTMLAudioElementWithSinkId = HTMLAudioElement & {
@@ -1711,6 +2067,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const selfMonitorStreamRef = useRef<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const localScreenStreamRef = useRef<MediaStream | null>(null);
+  const screenShareAudioProcessingStopRef = useRef<(() => void) | null>(null);
   const participantIdRef = useRef<string>("");
   const participantSessionTokenRef = useRef("");
   const roomCodeRef = useRef("");
@@ -1726,6 +2083,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const remoteTrackStreamIdsRef = useRef<Map<string, Map<string, string>>>(
     new Map(),
   );
+  const remoteScreenStreamIdsRef = useRef<Map<string, string>>(new Map());
   const screenShareStatsSampleRef = useRef<{
     bytesSent: number;
     timestamp: number;
@@ -2263,6 +2621,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
           masterOutputVolumeRef.current,
         isDeafenedRef.current,
         selectedAudioOutputDeviceIdRef.current,
+        remoteAudioMaximumOutputGain,
       );
       attachStreamToAudio(
         document.querySelector<HTMLAudioElement>(
@@ -2272,6 +2631,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         screenShareAudioVolumeRef.current * masterOutputVolumeRef.current,
         isDeafenedRef.current,
         selectedAudioOutputDeviceIdRef.current,
+        screenShareAudioMaximumOutputGain,
       );
     }
   }, []);
@@ -2402,6 +2762,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     (participantId: string) => {
       closePeerForParticipant(participantId);
       stopRemoteSpeakingMonitor(participantId);
+      remoteScreenStreamIdsRef.current.delete(participantId);
       removeRemoteParticipant(participantId);
       setActiveScreenShareParticipantId((current) =>
         current === participantId ? "" : current,
@@ -2692,9 +3053,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
             joinedAt: Date.now(),
             lastSeenAt: Date.now(),
           });
+        const screenStreamId =
+          remoteScreenStreamIdsRef.current.get(participantId) ??
+          participant.screenStreamId;
         const isScreenTrack =
-          Boolean(participant.screenStreamId) &&
-          participant.screenStreamId === incomingStreamId;
+          Boolean(screenStreamId) && screenStreamId === incomingStreamId;
         const targetStream =
           event.track.kind === "audio"
             ? isScreenTrack
@@ -2749,6 +3112,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
             hasVideo: participant.cameraStream
               .getVideoTracks()
               .some((track) => track.readyState === "live"),
+            screenStreamId: isScreenTrack
+              ? screenStreamId
+              : participant.screenStreamId,
           },
         }));
         setCallState("connected");
@@ -3118,6 +3484,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
     stopLocalSpeakingMonitor();
     stopLocalMediaTracks(localStreamRef.current);
     stopLocalMediaTracks(localScreenStreamRef.current);
+    screenShareAudioProcessingStopRef.current?.();
+    screenShareAudioProcessingStopRef.current = null;
     localStreamRef.current = null;
     localScreenStreamRef.current = null;
     screenShareStatsSampleRef.current = null;
@@ -3147,6 +3515,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
     setRemoteParticipants({});
     remoteTrackStreamIdsRef.current.clear();
+    remoteScreenStreamIdsRef.current.clear();
   }, [stopRemoteSpeakingMonitor]);
 
   const tearDownActiveCall = useCallback(() => {
@@ -3774,6 +4143,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
+      remoteScreenStreamIdsRef.current.set(participantId, streamId);
       setActiveScreenShareParticipantId(participantId);
       updateRemoteParticipant(participantId, (participant) => {
         const trackStreamIds =
@@ -3826,6 +4196,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
+      remoteScreenStreamIdsRef.current.delete(participantId);
       setActiveScreenShareParticipantId((current) =>
         current === participantId ? "" : current,
       );
@@ -4630,6 +5001,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
     const screenStream = localScreenStreamRef.current;
 
     if (!screenStream) {
+      screenShareAudioProcessingStopRef.current?.();
+      screenShareAudioProcessingStopRef.current = null;
       return;
     }
 
@@ -4639,6 +5012,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
       track.stop();
     }
 
+    screenShareAudioProcessingStopRef.current?.();
+    screenShareAudioProcessingStopRef.current = null;
     localScreenStreamRef.current = null;
     screenShareStatsSampleRef.current = null;
     setIsScreenSharing(false);
@@ -4702,24 +5077,29 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return false;
     }
 
+    let screenShareAudioProcessingStop: (() => void) | null = null;
+
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        audio: {
-          autoGainControl: false,
-          echoCancellation: false,
-          noiseSuppression: false,
-        },
-        video: screenShareConstraints(settings),
-      });
+      const displayStream = await navigator.mediaDevices.getDisplayMedia(
+        screenShareDisplayMediaOptions(settings),
+      );
+      const processedScreenShare =
+        createProcessedScreenShareAudioStream(displayStream);
+      const screenStream = processedScreenShare.stream;
+      screenShareAudioProcessingStop = processedScreenShare.stop;
       const [screenTrack] = screenStream.getVideoTracks();
 
       if (!screenTrack) {
         for (const track of screenStream.getTracks()) {
           track.stop();
         }
+        screenShareAudioProcessingStop();
         return false;
       }
 
+      screenShareAudioProcessingStopRef.current?.();
+      screenShareAudioProcessingStopRef.current = screenShareAudioProcessingStop;
+      screenShareAudioProcessingStop = null;
       localScreenStreamRef.current = screenStream;
       screenTrack.onended = () => {
         void stopScreenShare();
@@ -4771,6 +5151,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
       return true;
     } catch (mediaError) {
+      screenShareAudioProcessingStop?.();
+
       if (
         mediaError instanceof DOMException &&
         mediaError.name === "NotAllowedError"
@@ -5234,6 +5616,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       clampedVolume * masterOutputVolumeRef.current,
       isDeafenedRef.current,
       selectedAudioOutputDeviceIdRef.current,
+      remoteAudioMaximumOutputGain,
     );
   }
 
@@ -6537,38 +6920,30 @@ export function CallRoom({ roomId }: { roomId: string }) {
       }`}
     >
       {remoteList.map((participant) => (
-        <audio
+        <CallAudioSink
           key={participant.participantId}
-          data-participant-id={participant.participantId}
-          ref={(element) =>
-            attachStreamToAudio(
-              element,
-              participant.audioStream,
-              (remoteVolumes[participant.participantId] ?? 1) *
-                masterOutputVolume,
-              isDeafened,
-              selectedAudioOutputDeviceId,
-            )
+          maximumGain={remoteAudioMaximumOutputGain}
+          muted={isDeafened}
+          outputDeviceId={selectedAudioOutputDeviceId}
+          participantId={participant.participantId}
+          stream={participant.audioStream}
+          type="participant"
+          volume={
+            (remoteVolumes[participant.participantId] ?? 1) *
+            masterOutputVolume
           }
-          autoPlay
-          playsInline
         />
       ))}
       {remoteList.map((participant) => (
-        <audio
+        <CallAudioSink
           key={`${participant.participantId}-screen-audio`}
-          data-screen-audio-participant-id={participant.participantId}
-          ref={(element) =>
-            attachStreamToAudio(
-              element,
-              participant.screenAudioStream,
-              screenShareAudioVolume * masterOutputVolume,
-              isDeafened,
-              selectedAudioOutputDeviceId,
-            )
-          }
-          autoPlay
-          playsInline
+          maximumGain={screenShareAudioMaximumOutputGain}
+          muted={isDeafened}
+          outputDeviceId={selectedAudioOutputDeviceId}
+          participantId={participant.participantId}
+          stream={participant.screenAudioStream}
+          type="screen"
+          volume={screenShareAudioVolume * masterOutputVolume}
         />
       ))}
       <audio ref={selfMonitorAudioRef} autoPlay playsInline />

@@ -39,6 +39,13 @@ export const maxRoomParticipants = 6;
 
 export const creatorCookieName = (roomId: string) => `jec_creator_${roomId}`;
 
+export class ActiveRoomExistsError extends Error {
+  constructor(readonly room: Room) {
+    super("An active room already exists");
+    this.name = "ActiveRoomExistsError";
+  }
+}
+
 function generateRoomId() {
   return crypto.randomBytes(3).toString("hex");
 }
@@ -125,7 +132,12 @@ function cleanupRooms() {
 }
 
 export function createRoom({ spokenLanguage }: { spokenLanguage: Language }): Room {
-  rooms.clear();
+  cleanupRooms();
+
+  const activeRoom = rooms.values().next().value as Room | undefined;
+  if (activeRoom) {
+    throw new ActiveRoomExistsError(activeRoom);
+  }
 
   let roomId = generateRoomId();
   while (rooms.has(roomId)) {

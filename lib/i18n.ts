@@ -170,6 +170,10 @@ const strings = {
     createRoom: "Create Room",
     creatingRoom: "Creating room...",
     createRoomFailed: "Could not create room",
+    activeRoomExistsTitle: "Room already active",
+    activeRoomExists:
+      "A room is already active. Leave the current room before creating a new one.",
+    closeActiveRoomDialog: "Close active room dialog",
     hostAccessRequired: "Host access required",
     hostAccess: "Host access",
     hostPasscode: "Host passcode",
@@ -212,7 +216,7 @@ const strings = {
       "Output device selection is not supported in this browser.",
     noiseSuppression: "Noise suppression",
     noiseSuppressionHelp:
-      "Uses local RNNoise when available, with a dry safety path to avoid dropouts.",
+      "Uses local RNNoise while preserving a natural dry voice bed.",
     noiseGate: "Noise gate",
     noiseGateHelp: "Uses a soft expander so quiet speech is preserved without hard cuts.",
     noiseGateMeter: "Live input",
@@ -491,6 +495,10 @@ const strings = {
     createRoom: "ルームを作成",
     creatingRoom: "ルームを作成中...",
     createRoomFailed: "ルームを作成できませんでした",
+    activeRoomExistsTitle: "有効なルームがあります",
+    activeRoomExists:
+      "有効なルームがすでにあります。新しいルームを作成するには、現在のルームを退出してください。",
+    closeActiveRoomDialog: "有効なルームのダイアログを閉じる",
     hostAccessRequired: "ホスト権限が必要です",
     hostAccess: "ホストアクセス",
     hostPasscode: "ホストパスコード",
@@ -533,7 +541,7 @@ const strings = {
       "このブラウザでは出力デバイスの選択に対応していません。",
     noiseSuppression: "ノイズ抑制",
     noiseSuppressionHelp:
-      "利用可能な場合はローカルRNNoiseを使い、音切れ防止のドライ経路も残します。",
+      "ローカルRNNoiseを使いながら、自然な声のドライ成分も残します。",
     noiseGate: "ノイズゲート",
     noiseGateHelp: "急に切らず、小さな声も残すソフトなエキスパンダーです。",
     noiseGateMeter: "ライブ入力",

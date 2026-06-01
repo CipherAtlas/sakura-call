@@ -71,13 +71,13 @@ The local microphone chain is:
 3. Apply the local input gain control.
 4. Analyze input level for the live meter and gate state.
 5. Apply local RNNoise noise suppression when enabled.
-6. Keep a delayed, low-level dry safety path only when suppression is active.
+6. Keep a delayed dry voice bed while suppression is active so high suppression does not hollow out speech.
 7. Apply a soft noise gate.
 8. Apply automatic voice leveling.
 9. Apply compression and limiting.
 10. Send the processed mono track to WebRTC.
 
-Browser-provided noise suppression is intentionally disabled. The app uses its own local Web Audio/RNNoise processing so behavior is more consistent across microphones and browsers.
+Browser-provided noise suppression is intentionally disabled. The app uses its own local Web Audio/RNNoise processing so behavior is more consistent across microphones and browsers. The RNNoise blend is intentionally capped and mixed with a delayed dry voice bed to avoid the hollow, tunnel-like sound that can happen when a voice is over-suppressed.
 
 For most USB interfaces, use the interface directly as the Sakura Call microphone. OBS, BlackHole, or another virtual mixer should not be required just to convert a left-channel or multi-channel mic into a call-ready mono signal. A virtual mixer can still be useful if the browser cannot see the physical input channel at all, or if an external mixer chain sounds better for a specific device.
 
@@ -370,6 +370,7 @@ run.sh                        On-demand public runtime script
 - There is no database, account system, public room listing, queue, monitoring stack, CI/CD pipeline, or production deployment target.
 - TURN fallback requires configured Cloudflare Realtime TURN credentials.
 - Captions require an OpenAI API key and can take a few seconds depending on speech length and translation load.
+- Screen-share audio is browser-limited. In practice, share-audio support is expected only when sharing a Chrome tab with tab audio enabled; Safari, Firefox, window sharing, and entire-screen sharing may provide video only.
 - Group calls use a browser mesh, so CPU and bandwidth cost grow with participant count.
 
 ## Verification Checklist
@@ -387,6 +388,7 @@ Before a real call, confirm:
 - The guest can join with the language, name, and room code flow.
 - Participants beyond the 6-person room capacity are blocked.
 - Audio, video, and screen sharing controls work for the selected browsers.
+- Screen-share audio is tested from a Chrome tab with tab audio enabled, not from Safari, Firefox, window sharing, or entire-screen sharing.
 - Direct USB interface microphones produce centered mono voice audio with the correct mic channel selected.
 - Voice settings show live input level, noise floor, gate threshold, and gate open/closed state.
 - The settings modal shows the connection path panel during calls.

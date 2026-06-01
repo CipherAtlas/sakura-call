@@ -56,6 +56,10 @@ type TurnStatus = {
   updatedAt: number;
 };
 
+type ActiveRoomConflict = {
+  roomCode: string;
+};
+
 function turnStatusLabel(language: Language, status: TurnStatus | null) {
   switch (status?.phase) {
     case "disabled":
@@ -83,10 +87,13 @@ export default function HomePage() {
   const [isOwnerSigningOut, setIsOwnerSigningOut] = useState(false);
   const [ownerMessage, setOwnerMessage] = useState("");
   const [roomCode, setRoomCode] = useState("");
+  const [activeRoomConflict, setActiveRoomConflict] =
+    useState<ActiveRoomConflict | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState("");
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => getSavedTheme());
+  const hasOpenHomeModal = showSettings || Boolean(activeRoomConflict);
 
   useEffect(() => {
     setLanguage(getSavedLanguage());
@@ -138,13 +145,14 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (!showSettings) {
+    if (!hasOpenHomeModal) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setShowSettings(false);
+        setActiveRoomConflict(null);
       }
     }
 
@@ -155,7 +163,7 @@ export default function HomePage() {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.classList.remove("garden-modal-open");
     };
-  }, [showSettings]);
+  }, [hasOpenHomeModal]);
 
   const loadTurnStatus = useCallback(async () => {
     const response = await fetch("/api/turn/status", {
@@ -209,6 +217,18 @@ export default function HomePage() {
 
       if (response.status === 429) {
         setError(t(language, "codeBlocked"));
+        return;
+      }
+
+      if (response.status === 409) {
+        const data = (await response.json().catch(() => null)) as {
+          roomCode?: string;
+        } | null;
+        const existingRoomCode = data?.roomCode ?? "";
+
+        setHomeMode("join");
+        setRoomCode(existingRoomCode);
+        setActiveRoomConflict({ roomCode: existingRoomCode });
         return;
       }
 
@@ -368,13 +388,24 @@ export default function HomePage() {
 
   function handleShowJoinRoom() {
     setHomeMode("join");
+    setActiveRoomConflict(null);
     setError("");
   }
 
   function handleBackToChoices() {
     setHomeMode("choose");
     setRoomCode("");
+    setActiveRoomConflict(null);
     setError("");
+  }
+
+  function handleCloseActiveRoomDialog() {
+    setActiveRoomConflict(null);
+  }
+
+  async function handleJoinActiveRoom() {
+    setActiveRoomConflict(null);
+    await handleJoinRoom();
   }
 
   function handleThemeChange(nextTheme: ThemeMode) {
@@ -572,6 +603,87 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {activeRoomConflict ? (
+        <div
+          className="settings-modal-backdrop fixed inset-0 z-50 grid place-items-center px-4 py-6"
+          onClick={handleCloseActiveRoomDialog}
+        >
+          <section
+            aria-describedby="active-room-modal-body"
+            aria-labelledby="active-room-modal-title"
+            aria-modal="true"
+            className="settings-modal active-room-modal max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-hidden"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-ribbon" aria-hidden="true" />
+            <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
+              <div className="min-w-0">
+                <p className="garden-kicker flex items-center gap-2">
+                  <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
+                  {t(language, "appName")}
+                </p>
+                <h2
+                  className="garden-title mt-2 text-2xl"
+                  id="active-room-modal-title"
+                >
+                  {t(language, "activeRoomExistsTitle")}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label={t(language, "closeActiveRoomDialog")}
+                onClick={handleCloseActiveRoomDialog}
+                className="garden-icon-button settings-modal-close grid h-10 w-10 place-items-center rounded-full"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="settings-modal-content grid gap-4 px-5 pb-5">
+              <section className="settings-modal-section active-room-modal-section">
+                <p
+                  className="garden-muted text-base font-bold leading-snug"
+                  id="active-room-modal-body"
+                >
+                  {t(language, "activeRoomExists")}
+                </p>
+
+                <div
+                  className="active-room-code-readout"
+                  aria-label={`${t(language, "roomCode")} ${activeRoomConflict.roomCode}`}
+                >
+                  <span>{t(language, "roomCode")}</span>
+                  <strong className="garden-code">
+                    {activeRoomConflict.roomCode || t(language, "roomCodePlaceholder")}
+                  </strong>
+                </div>
+              </section>
+
+              <div className="active-room-modal-actions flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={handleCloseActiveRoomDialog}
+                  className="garden-button garden-button-quiet h-12 px-5"
+                >
+                  {t(language, "back")}
+                </button>
+                <button
+                  type="button"
+                  autoFocus
+                  disabled={!/^\d{4}$/.test(activeRoomConflict.roomCode) || isJoining}
+                  onClick={() => void handleJoinActiveRoom()}
+                  className="garden-button garden-button-primary h-12 px-5"
+                >
+                  <Leaf className="h-5 w-5" aria-hidden="true" />
+                  <span>{isJoining ? t(language, "joiningRoom") : joinRoomLabel}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {showSettings ? (
         <div

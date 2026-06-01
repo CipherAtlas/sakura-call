@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ActiveRoomExistsError,
   createRoom,
   joinRoom,
   leaveRoom,
@@ -46,6 +47,62 @@ test("creates rooms with a fixed six-person capacity", () => {
   const room = createRoom({ spokenLanguage: "en" });
 
   assert.equal(room.maxParticipants, maxRoomParticipants);
+});
+
+test("blocks new rooms until the host leaves the active room", () => {
+  resetRoomsForTests();
+  const room = createRoom({ spokenLanguage: "en" });
+  const host = join({
+    displayName: "Host",
+    isCreator: true,
+    participantId: "host",
+    roomId: room.roomId,
+  });
+  const guest = join({
+    displayName: "Guest",
+    participantId: "guest",
+    roomCode: room.roomCode,
+    roomId: room.roomId,
+  });
+
+  assert.equal(host.ok, true);
+  assert.equal(guest.ok, true);
+
+  assert.throws(
+    () => createRoom({ spokenLanguage: "en" }),
+    (error) => {
+      assert.equal(error instanceof ActiveRoomExistsError, true);
+      assert.equal((error as ActiveRoomExistsError).room.roomId, room.roomId);
+      return true;
+    },
+  );
+
+  assert.equal(
+    join({
+      displayName: "Late Guest",
+      participantId: "late-guest",
+      roomCode: room.roomCode,
+      roomId: room.roomId,
+    }).ok,
+    true,
+  );
+
+  assert.deepEqual(leaveRoom(room.roomId, "guest"), {
+    roomEnded: false,
+    participant: guest.ok ? guest.participant : undefined,
+  });
+  assert.throws(
+    () => createRoom({ spokenLanguage: "en" }),
+    ActiveRoomExistsError,
+  );
+
+  assert.deepEqual(leaveRoom(room.roomId, "host"), {
+    roomEnded: true,
+    participant: host.ok ? host.participant : undefined,
+  });
+
+  const nextRoom = createRoom({ spokenLanguage: "en" });
+  assert.equal(nextRoom.maxParticipants, maxRoomParticipants);
 });
 
 test("enforces fixed room capacity", () => {
