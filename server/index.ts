@@ -264,7 +264,7 @@ async function configuredIceServers({
       });
 
       if (cloudflareIceServers) {
-        return cloudflareIceServers;
+        return [...iceServers, ...cloudflareIceServers];
       }
     } catch (error) {
       console.error("Cloudflare TURN credential generation failed:", error);

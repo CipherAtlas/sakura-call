@@ -179,7 +179,7 @@ function renderScreenSurface(
       <video
         ref={(element) => attachStreamToVideo(element, surface.stream)}
         autoPlay
-        muted={surface.isLocal}
+        muted
         playsInline
         className="media-video screen-share-video"
       />

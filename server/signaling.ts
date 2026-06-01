@@ -489,7 +489,8 @@ export function createSignalingServer(httpServer: HttpServer) {
     socket.on("webrtc:offer", (payload) => {
       emitAuthorizedPeerEvent(io, socket.id, "webrtc:offer", {
         toParticipantId: payload?.toParticipantId,
-        description: payload?.description
+        description: payload?.description,
+        iceRestart: payload?.iceRestart === true
       });
     });
 

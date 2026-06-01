@@ -17,8 +17,13 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { memo, type ReactNode } from "react";
-import type { MicrophoneProcessingSettings } from "@/lib/audioEnhancement";
+import { memo, type CSSProperties, type ReactNode } from "react";
+import { microphoneChannelModes } from "@/lib/audioEnhancement";
+import type {
+  MicrophoneChannelMode,
+  MicrophoneLevelSnapshot,
+  MicrophoneProcessingSettings,
+} from "@/lib/audioEnhancement";
 import {
   isSupportedLanguage,
   supportedLanguageOptions,
@@ -135,6 +140,22 @@ const screenSharePresetIds: ScreenSharePresetId[] = [
   "custom",
 ];
 
+function clampUnit(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.min(1, Math.max(0, value));
+}
+
+function unitPercent(value: number) {
+  return Math.round(clampUnit(value) * 100);
+}
+
+function unitPercentStyle(value: number) {
+  return `${(clampUnit(value) * 100).toFixed(1)}%`;
+}
+
 function turnStatusLabel(language: Language, status: TurnStatus | null) {
   switch (status?.phase) {
     case "disabled":
@@ -188,6 +209,22 @@ function screenSharePresetHelp(language: Language, presetId: ScreenSharePresetId
       return t(language, "screenQualityUltraHelp");
     case "custom":
       return t(language, "screenQualityCustomHelp");
+  }
+}
+
+function microphoneChannelModeLabel(
+  language: Language,
+  mode: MicrophoneChannelMode,
+) {
+  switch (mode) {
+    case "auto":
+      return t(language, "microphoneChannelAuto");
+    case "input1":
+      return t(language, "microphoneChannelInput1");
+    case "input2":
+      return t(language, "microphoneChannelInput2");
+    case "mix":
+      return t(language, "microphoneChannelMix");
   }
 }
 
@@ -528,8 +565,10 @@ function RemoteAudioPanel({
   onLocalInputVolumeChange,
   onMasterOutputVolumeChange,
   onRemoteVolumeChange,
+  onScreenShareAudioVolumeChange,
   remoteParticipants,
   remoteVolumes,
+  screenShareAudioVolume,
 }: {
   language: Language;
   localInputVolume: number;
@@ -537,8 +576,10 @@ function RemoteAudioPanel({
   onLocalInputVolumeChange: (value: string) => void;
   onMasterOutputVolumeChange: (value: string) => void;
   onRemoteVolumeChange: (participantId: string, value: string) => void;
+  onScreenShareAudioVolumeChange: (value: string) => void;
   remoteParticipants: RemoteAudioParticipant[];
   remoteVolumes: Record<string, number>;
+  screenShareAudioVolume: number;
 }) {
   return (
     <section className="settings-modal-section participant-volume-panel">
@@ -583,6 +624,25 @@ function RemoteAudioPanel({
               />
               <span className="participant-volume-value">
                 {Math.round(masterOutputVolume * 100)}%
+              </span>
+            </label>
+            <label className="participant-volume-row">
+              <span className="participant-volume-name">
+                {t(language, "mixerScreenShareAudio")}
+              </span>
+              <input
+                aria-label={t(language, "mixerScreenShareAudioVolume")}
+                max="100"
+                min="0"
+                onChange={(event) =>
+                  onScreenShareAudioVolumeChange(event.target.value)
+                }
+                step="1"
+                type="range"
+                value={Math.round(screenShareAudioVolume * 100)}
+              />
+              <span className="participant-volume-value">
+                {Math.round(screenShareAudioVolume * 100)}%
               </span>
             </label>
             {remoteParticipants.map((participant) => {
@@ -753,10 +813,12 @@ function CallSettingsModal({
   onMasterOutputVolumeChange,
   onOpenVoiceSettings,
   onRemoteVolumeChange,
+  onScreenShareAudioVolumeChange,
   onThemeChange,
   open,
   remoteParticipants,
   remoteVolumes,
+  screenShareAudioVolume,
   theme,
   turnRelayReady,
   turnStatus,
@@ -777,10 +839,12 @@ function CallSettingsModal({
   onMasterOutputVolumeChange: (value: string) => void;
   onOpenVoiceSettings: () => void;
   onRemoteVolumeChange: (participantId: string, value: string) => void;
+  onScreenShareAudioVolumeChange: (value: string) => void;
   onThemeChange: (theme: ThemeMode) => void;
   open: boolean;
   remoteParticipants: RemoteAudioParticipant[];
   remoteVolumes: Record<string, number>;
+  screenShareAudioVolume: number;
   theme: ThemeMode;
   turnRelayReady: boolean;
   turnStatus: TurnStatus | null;
@@ -908,8 +972,10 @@ function CallSettingsModal({
               onLocalInputVolumeChange={onLocalInputVolumeChange}
               onMasterOutputVolumeChange={onMasterOutputVolumeChange}
               onRemoteVolumeChange={onRemoteVolumeChange}
+              onScreenShareAudioVolumeChange={onScreenShareAudioVolumeChange}
               remoteParticipants={remoteParticipants}
               remoteVolumes={remoteVolumes}
+              screenShareAudioVolume={screenShareAudioVolume}
             />
           ) : null}
 
@@ -942,42 +1008,67 @@ function CallSettingsModal({
 }
 
 function VoiceSettingsModal({
+  audioOutputDevices,
+  isAudioOutputSelectionSupported,
   isPreparingMedia,
   isReplacingMicrophone,
   isTestingMicrophone,
   language,
   localInputVolume,
   microphoneDevices,
+  microphoneLevel,
   onClose,
+  onAudioOutputDeviceChange,
   onLocalInputVolumeChange,
   onMicrophoneDeviceChange,
   onStartMicrophoneTest,
+  onVoiceSettingCommit,
   onVoiceSettingChange,
   open,
+  selectedAudioOutputDeviceId,
   selectedMicrophoneDeviceId,
   voiceSettings,
 }: {
+  audioOutputDevices: MediaDeviceInfo[];
+  isAudioOutputSelectionSupported: boolean;
   isPreparingMedia: boolean;
   isReplacingMicrophone: boolean;
   isTestingMicrophone: boolean;
   language: Language;
   localInputVolume: number;
   microphoneDevices: MediaDeviceInfo[];
+  microphoneLevel: MicrophoneLevelSnapshot;
   onClose: () => void;
+  onAudioOutputDeviceChange: (deviceId: string) => void;
   onLocalInputVolumeChange: (value: string) => void;
   onMicrophoneDeviceChange: (deviceId: string) => void;
   onStartMicrophoneTest: () => void;
+  onVoiceSettingCommit: (
+    field: keyof MicrophoneProcessingSettings,
+    value: string,
+  ) => void;
   onVoiceSettingChange: (
     field: keyof MicrophoneProcessingSettings,
     value: string,
   ) => void;
   open: boolean;
+  selectedAudioOutputDeviceId: string;
   selectedMicrophoneDeviceId: string;
   voiceSettings: MicrophoneProcessingSettings;
 }) {
   if (!open) {
     return null;
   }
+
+  const gateMeterStyle = {
+    "--gate-threshold": unitPercentStyle(microphoneLevel.gateThreshold),
+    "--noise-floor": unitPercentStyle(microphoneLevel.noiseFloor),
+    "--voice-level": unitPercentStyle(microphoneLevel.level),
+    "--voice-peak": unitPercentStyle(microphoneLevel.peak),
+  } as CSSProperties;
+  const gateStatusKey = microphoneLevel.isGateOpen
+    ? "noiseGateOpen"
+    : "noiseGateClosed";
 
   return (
     <ModalBackdrop onClose={onClose}>
@@ -1048,6 +1139,62 @@ function VoiceSettingsModal({
                 {t(language, "switchingMicrophone")}
               </p>
             ) : null}
+            <label className="voice-select-field">
+              <span className="voice-control-label">
+                {t(language, "microphoneChannelMode")}
+              </span>
+              <select
+                value={voiceSettings.microphoneChannelMode}
+                onChange={(event) =>
+                  onVoiceSettingChange(
+                    "microphoneChannelMode",
+                    event.target.value,
+                  )
+                }
+                className="garden-select"
+              >
+                {microphoneChannelModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {microphoneChannelModeLabel(language, mode)}
+                  </option>
+                ))}
+              </select>
+              <small>{t(language, "microphoneChannelHelp")}</small>
+            </label>
+            <label className="voice-select-field">
+              <span className="voice-control-label">
+                {t(language, "audioOutputDevice")}
+              </span>
+              <select
+                value={selectedAudioOutputDeviceId}
+                onChange={(event) => onAudioOutputDeviceChange(event.target.value)}
+                disabled={!isAudioOutputSelectionSupported}
+                className="garden-select"
+              >
+                <option value="">
+                  {t(language, "defaultAudioOutputDevice")}
+                </option>
+                {selectedAudioOutputDeviceId &&
+                !audioOutputDevices.some(
+                  (device) => device.deviceId === selectedAudioOutputDeviceId,
+                ) ? (
+                  <option value={selectedAudioOutputDeviceId}>
+                    {t(language, "selectedAudioOutputDevice")}
+                  </option>
+                ) : null}
+                {audioOutputDevices.map((device, index) => (
+                  <option key={device.deviceId || index} value={device.deviceId}>
+                    {device.label ||
+                      `${t(language, "audioOutputDevice")} ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!isAudioOutputSelectionSupported ? (
+              <p className="voice-settings-note">
+                {t(language, "audioOutputDeviceUnsupported")}
+              </p>
+            ) : null}
           </section>
 
           <section className="settings-modal-section voice-settings-section">
@@ -1071,6 +1218,37 @@ function VoiceSettingsModal({
                     event.target.value,
                   )
                 }
+                onBlur={(event) =>
+                  onVoiceSettingCommit(
+                    "noiseReduction",
+                    event.currentTarget.value,
+                  )
+                }
+                onKeyUp={(event) => {
+                  if (
+                    [
+                      "ArrowDown",
+                      "ArrowLeft",
+                      "ArrowRight",
+                      "ArrowUp",
+                      "End",
+                      "Home",
+                      "PageDown",
+                      "PageUp",
+                    ].includes(event.key)
+                  ) {
+                    onVoiceSettingCommit(
+                      "noiseReduction",
+                      event.currentTarget.value,
+                    );
+                  }
+                }}
+                onPointerUp={(event) =>
+                  onVoiceSettingCommit(
+                    "noiseReduction",
+                    event.currentTarget.value,
+                  )
+                }
                 step="1"
                 type="range"
                 value={Math.round(voiceSettings.noiseReduction * 100)}
@@ -1089,6 +1267,43 @@ function VoiceSettingsModal({
                   ? t(language, "off")
                   : `${Math.round(voiceSettings.noiseGate * 100)}%`}
               </span>
+              <div
+                className={`voice-gate-meter ${
+                  microphoneLevel.isGateOpen ? "is-open" : "is-closed"
+                }`}
+                style={gateMeterStyle}
+              >
+                <div className="voice-gate-meter-status">
+                  <span>{t(language, "noiseGateMeter")}</span>
+                  <strong>{t(language, gateStatusKey)}</strong>
+                </div>
+                <div
+                  aria-label={t(language, "voiceLevel")}
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={unitPercent(microphoneLevel.level)}
+                  className="voice-gate-meter-track"
+                  role="meter"
+                >
+                  <span className="voice-gate-meter-noise" aria-hidden="true" />
+                  <span className="voice-gate-meter-fill" aria-hidden="true" />
+                  <span className="voice-gate-meter-peak" aria-hidden="true" />
+                  <span
+                    className="voice-gate-meter-threshold"
+                    aria-hidden="true"
+                  />
+                </div>
+                <div className="voice-gate-meter-legend">
+                  <span>
+                    <i className="voice-gate-meter-swatch noise" />
+                    {t(language, "noiseFloor")}
+                  </span>
+                  <span>
+                    <i className="voice-gate-meter-swatch threshold" />
+                    {t(language, "gateThreshold")}
+                  </span>
+                </div>
+              </div>
               <input
                 aria-label={t(language, "noiseGate")}
                 max="100"
@@ -1490,12 +1705,14 @@ function ScreenShareSettingsModal({
 }
 
 export const CallRoomModals = memo(function CallRoomModals({
+  audioOutputDevices,
   callState,
   canManageTurnRelay,
   connectionPathRows,
   connectionPathSummary,
   hostRoomCode,
   isApplyingScreenQuality,
+  isAudioOutputSelectionSupported,
   isCodeCopied,
   isPreparingMedia,
   isReplacingMicrophone,
@@ -1506,7 +1723,9 @@ export const CallRoomModals = memo(function CallRoomModals({
   masterOutputVolume,
   mediaLayoutMode,
   microphoneDevices,
+  microphoneLevel,
   onApplyScreenShareQuality,
+  onAudioOutputDeviceChange,
   onCloseLayoutPicker,
   onCloseLeaveConfirmation,
   onCloseScreenShareSettings,
@@ -1523,6 +1742,7 @@ export const CallRoomModals = memo(function CallRoomModals({
   onOpenVoiceSettings,
   onRemoteVolumeChange,
   onScreenShareNumberChange,
+  onScreenShareAudioVolumeChange,
   onScreenShareResolutionChange,
   onSelectScreenSharePreset,
   onSelectSurface,
@@ -1530,12 +1750,15 @@ export const CallRoomModals = memo(function CallRoomModals({
   onStartScreenShareFromSettings,
   onThemeChange,
   onUpdateScreenShareQuality,
+  onVoiceSettingCommit,
   onVoiceSettingChange,
   orderedSurfaces,
   remoteParticipants,
   remoteVolumes,
   screenShareQuality,
   screenShareStats,
+  screenShareAudioVolume,
+  selectedAudioOutputDeviceId,
   selectedMicrophoneDeviceId,
   selectedScreenResolution,
   showLayoutPicker,
@@ -1551,12 +1774,14 @@ export const CallRoomModals = memo(function CallRoomModals({
   turnStatus,
   voiceSettings,
 }: {
+  audioOutputDevices: MediaDeviceInfo[];
   callState: CallState;
   canManageTurnRelay: boolean;
   connectionPathRows: PeerConnectionPathSnapshot[];
   connectionPathSummary: ConnectionPathSummary;
   hostRoomCode?: string;
   isApplyingScreenQuality: boolean;
+  isAudioOutputSelectionSupported: boolean;
   isCodeCopied: boolean;
   isPreparingMedia: boolean;
   isReplacingMicrophone: boolean;
@@ -1567,7 +1792,9 @@ export const CallRoomModals = memo(function CallRoomModals({
   masterOutputVolume: number;
   mediaLayoutMode: MediaLayoutMode;
   microphoneDevices: MediaDeviceInfo[];
+  microphoneLevel: MicrophoneLevelSnapshot;
   onApplyScreenShareQuality: () => void;
+  onAudioOutputDeviceChange: (deviceId: string) => void;
   onCloseLayoutPicker: () => void;
   onCloseLeaveConfirmation: () => void;
   onCloseScreenShareSettings: () => void;
@@ -1583,6 +1810,7 @@ export const CallRoomModals = memo(function CallRoomModals({
   onMicrophoneDeviceChange: (deviceId: string) => void;
   onOpenVoiceSettings: () => void;
   onRemoteVolumeChange: (participantId: string, value: string) => void;
+  onScreenShareAudioVolumeChange: (value: string) => void;
   onScreenShareNumberChange: (
     field: "width" | "height" | "frameRate" | "bitrateKbps",
     value: string,
@@ -1596,6 +1824,10 @@ export const CallRoomModals = memo(function CallRoomModals({
   onUpdateScreenShareQuality: (
     patch: Partial<Omit<ScreenShareQualitySettings, "presetId">>,
   ) => void;
+  onVoiceSettingCommit: (
+    field: keyof MicrophoneProcessingSettings,
+    value: string,
+  ) => void;
   onVoiceSettingChange: (
     field: keyof MicrophoneProcessingSettings,
     value: string,
@@ -1605,6 +1837,8 @@ export const CallRoomModals = memo(function CallRoomModals({
   remoteVolumes: Record<string, number>;
   screenShareQuality: ScreenShareQualitySettings;
   screenShareStats: ScreenShareStatsSnapshot | null;
+  screenShareAudioVolume: number;
+  selectedAudioOutputDeviceId: string;
   selectedMicrophoneDeviceId: string;
   selectedScreenResolution: string;
   showLayoutPicker: boolean;
@@ -1661,27 +1895,35 @@ export const CallRoomModals = memo(function CallRoomModals({
         onMasterOutputVolumeChange={onMasterOutputVolumeChange}
         onOpenVoiceSettings={onOpenVoiceSettings}
         onRemoteVolumeChange={onRemoteVolumeChange}
+        onScreenShareAudioVolumeChange={onScreenShareAudioVolumeChange}
         onThemeChange={onThemeChange}
         open={showSettings}
         remoteParticipants={remoteParticipants}
         remoteVolumes={remoteVolumes}
+        screenShareAudioVolume={screenShareAudioVolume}
         theme={theme}
         turnRelayReady={turnRelayReady}
         turnStatus={turnStatus}
       />
       <VoiceSettingsModal
+        audioOutputDevices={audioOutputDevices}
+        isAudioOutputSelectionSupported={isAudioOutputSelectionSupported}
         isPreparingMedia={isPreparingMedia}
         isReplacingMicrophone={isReplacingMicrophone}
         isTestingMicrophone={isTestingMicrophone}
         language={language}
         localInputVolume={localInputVolume}
         microphoneDevices={microphoneDevices}
+        microphoneLevel={microphoneLevel}
         onClose={onCloseVoiceSettings}
+        onAudioOutputDeviceChange={onAudioOutputDeviceChange}
         onLocalInputVolumeChange={onLocalInputVolumeChange}
         onMicrophoneDeviceChange={onMicrophoneDeviceChange}
         onStartMicrophoneTest={onStartMicrophoneTest}
+        onVoiceSettingCommit={onVoiceSettingCommit}
         onVoiceSettingChange={onVoiceSettingChange}
         open={showVoiceSettings}
+        selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
         selectedMicrophoneDeviceId={selectedMicrophoneDeviceId}
         voiceSettings={voiceSettings}
       />

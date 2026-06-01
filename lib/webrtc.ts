@@ -94,6 +94,7 @@ export function closePeerConnection(peerConnection: RTCPeerConnection | null) {
 
   peerConnection.onconnectionstatechange = null;
   peerConnection.onicecandidate = null;
+  peerConnection.oniceconnectionstatechange = null;
   peerConnection.onsignalingstatechange = null;
   peerConnection.ontrack = null;
 

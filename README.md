@@ -44,13 +44,13 @@ There is no OCI layer, no self-hosted coturn service, no TURN Docker Compose sta
 
 ## Media And Relay Model
 
-Sakura Call creates a peer-to-peer WebRTC mesh between joined participants. Each browser starts with STUN from `NEXT_PUBLIC_STUN_URLS`. After a participant has joined a room, the browser requests authenticated ICE configuration from `/api/ice-servers`; the server adds short-lived Cloudflare Realtime TURN credentials when TURN is configured.
+Sakura Call creates a peer-to-peer WebRTC mesh between joined participants. Each browser starts with STUN from `NEXT_PUBLIC_STUN_URLS`. If direct ICE does not connect or fails, the browser requests authenticated ICE configuration from `/api/ice-servers`; the server adds short-lived Cloudflare Realtime TURN credentials when TURN is configured, and the browser restarts ICE with TURN available.
 
 Normal behavior:
 
 - `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all`.
-- Direct P2P is preferred.
-- TURN is used only if the browser's ICE negotiation selects a relay candidate.
+- Direct P2P is tried first with STUN-only negotiation.
+- TURN is added only after the direct path fails or times out, unless relay-only testing is enabled.
 - Long-lived Cloudflare TURN key material stays server-side.
 
 Testing behavior:
@@ -59,6 +59,36 @@ Testing behavior:
 - Set it back to `all` for real calls.
 
 The meeting settings modal includes a live connection path panel. It polls WebRTC stats and shows whether each active peer connection is `Direct P2P`, `TURN fallback`, `Mixed`, or `Waiting`, with RTT when the browser reports it.
+
+## Microphone Processing Model
+
+Sakura Call normalizes microphone audio in the browser before sending it through WebRTC. This is especially important for USB audio interfaces, aggregate devices, and virtual devices that may expose a single mic as one side of a stereo or multi-channel input.
+
+The local microphone chain is:
+
+1. Capture the selected browser microphone.
+2. Route the selected mic channel mode into a mono voice path.
+3. Apply the local input gain control.
+4. Analyze input level for the live meter and gate state.
+5. Apply local RNNoise noise suppression when enabled.
+6. Keep a delayed, low-level dry safety path only when suppression is active.
+7. Apply a soft noise gate.
+8. Apply automatic voice leveling.
+9. Apply compression and limiting.
+10. Send the processed mono track to WebRTC.
+
+Browser-provided noise suppression is intentionally disabled. The app uses its own local Web Audio/RNNoise processing so behavior is more consistent across microphones and browsers.
+
+For most USB interfaces, use the interface directly as the Sakura Call microphone. OBS, BlackHole, or another virtual mixer should not be required just to convert a left-channel or multi-channel mic into a call-ready mono signal. A virtual mixer can still be useful if the browser cannot see the physical input channel at all, or if an external mixer chain sounds better for a specific device.
+
+The voice settings modal includes a mic channel selector:
+
+- `Auto` starts with input 1 and switches to input 2 only when input 2 is clearly the active voice channel.
+- `Input 1 / Left` is the first troubleshooting choice for USB interfaces where the direct browser capture sounds distorted.
+- `Input 2 / Right` is useful when the mic is physically plugged into interface input 2.
+- `Mix all channels` keeps a manual all-channel mix available for unusual devices, but it is not the safest default for USB interfaces.
+
+The same modal includes a live noise gate meter with input level, estimated noise floor, gate threshold, peak level, and gate open/closed state.
 
 ## Privacy Model
 
@@ -84,7 +114,7 @@ Important boundaries:
 - Tailwind CSS 4
 - Socket.IO for room signaling, captions, and call events
 - WebRTC for audio, video, and screen media
-- Web Audio API for browser-side speech segmentation
+- Web Audio API and RNNoise WASM for browser-side speech segmentation and microphone processing
 - OpenAI API for transcription and translation
 - Cloudflare Tunnel for temporary HTTPS access to the HTTP app
 - Cloudflare Realtime TURN for managed WebRTC relay fallback
@@ -306,7 +336,7 @@ components/                   Client UI and call experience
 components/CallRoom.tsx       Meeting room, WebRTC state, controls, settings modals
 components/VideoGrid.tsx      Meeting media layout
 lib/audioCapture.ts           Browser speech segmentation and WAV encoding
-lib/audioEnhancement.ts       Browser microphone filtering and soft noise gate
+lib/audioEnhancement.ts       Browser microphone mono mix, RNNoise, gate, leveling, compression, and limiting
 lib/i18n.ts                   Supported language metadata and UI strings
 lib/roomCode.ts               Browser session storage helper for room codes
 lib/socket.ts                 Socket.IO client
@@ -357,6 +387,8 @@ Before a real call, confirm:
 - The guest can join with the language, name, and room code flow.
 - Participants beyond the 6-person room capacity are blocked.
 - Audio, video, and screen sharing controls work for the selected browsers.
+- Direct USB interface microphones produce centered mono voice audio with the correct mic channel selected.
+- Voice settings show live input level, noise floor, gate threshold, and gate open/closed state.
 - The settings modal shows the connection path panel during calls.
 - The conversation and captions section remains visible during audio, video, and screen-sharing states.
 - Each viewer receives subtitles translated into their selected spoken language when captions are enabled.

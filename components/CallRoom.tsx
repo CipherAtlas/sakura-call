@@ -57,8 +57,14 @@ import type {
 import { createAudioCapture, AudioCaptureController } from "@/lib/audioCapture";
 import {
   createEnhancedMicrophoneStream,
+  idleMicrophoneLevelSnapshot,
+  microphoneChannelModes,
 } from "@/lib/audioEnhancement";
-import type { MicrophoneProcessingSettings } from "@/lib/audioEnhancement";
+import type {
+  MicrophoneChannelMode,
+  MicrophoneLevelSnapshot,
+  MicrophoneProcessingSettings,
+} from "@/lib/audioEnhancement";
 import {
   clearSavedLanguage,
   getSavedDisplayName,
@@ -68,6 +74,7 @@ import {
   saveLanguage,
   t,
 } from "@/lib/i18n";
+import type { TranslationKey } from "@/lib/i18n";
 import {
   getSavedParticipantSessionTokenForRoom,
   getSavedRoomCodeForRoom,
@@ -172,6 +179,7 @@ type RemoteParticipantState = PublicParticipant & {
   hasVideo: boolean;
   isSpeaking: boolean;
   partialCaption: CaptionEvent | null;
+  screenAudioStream: MediaStream;
   screenStream: MediaStream;
   screenStreamId: string;
 };
@@ -183,6 +191,11 @@ type PeerConnectionState = {
   makingOffer: boolean;
   ignoreOffer: boolean;
   needsNegotiation: boolean;
+  needsIceRestart: boolean;
+  turnFallbackAttempted: boolean;
+  turnFallbackIceServersPromise: Promise<boolean> | null;
+  turnFallbackTimerId: number | null;
+  turnFallbackEnabled: boolean;
   screenSender: RTCRtpSender | null;
 };
 
@@ -290,20 +303,41 @@ type CaptionVideoPipController = {
 };
 
 const captionLogLimit = 80;
+const mediaRequestTimeoutMs = 9000;
+const turnFallbackIceTimeoutMs = 8000;
+const turnFallbackDisconnectedTimeoutMs = 3000;
 const mediaLayoutStorageKey = "sakura.mediaLayoutMode";
 const fullscreenConversationModeStorageKey =
   "sakura.fullscreenConversationMode";
 const localInputVolumeStorageKey = "sakura.localInputVolume";
 const masterOutputVolumeStorageKey = "sakura.masterOutputVolume";
 const remoteVolumeStorageKey = "sakura.remoteVolumes";
+const screenShareAudioVolumeStorageKey = "sakura.screenShareAudioVolume";
+const audioOutputDeviceStorageKey = "sakura.audioOutputDeviceId";
 const microphoneDeviceStorageKey = "sakura.microphoneDeviceId";
 const voiceSettingsStorageKey = "sakura.voiceSettings";
+const noiseReductionCommitDelayMs = 180;
 const defaultVoiceSettings: MicrophoneProcessingSettings = {
-  noiseGate: 0.14,
-  noiseReduction: 0.62,
+  microphoneChannelMode: "auto",
+  noiseGate: 0.02,
+  noiseReduction: 0.5,
 };
 const defaultLocalInputVolume = 0.5;
-const defaultMasterOutputVolume = 0.75;
+const defaultMasterOutputVolume = 0.5;
+const defaultScreenShareAudioVolume = 0.75;
+type MediaPreparationStep =
+  | "idle"
+  | "microphone"
+  | "microphoneFallback"
+  | "voice"
+  | "camera";
+const mediaPreparationStatusKeys: Record<MediaPreparationStep, TranslationKey> = {
+  camera: "preparingCamera",
+  idle: "preparingPermissions",
+  microphone: "preparingMicrophone",
+  microphoneFallback: "preparingDefaultMicrophone",
+  voice: "preparingVoice",
+};
 const initialFullscreenConversationOffset: FullscreenConversationOffset = {
   x: 0,
   y: 0,
@@ -388,7 +422,13 @@ function getSavedVolume(key: string, fallback = 1) {
     return safeFallback;
   }
 
-  const value = Number(window.localStorage.getItem(key));
+  const savedValue = window.localStorage.getItem(key);
+
+  if (savedValue === null) {
+    return safeFallback;
+  }
+
+  const value = Number(savedValue);
 
   return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : safeFallback;
 }
@@ -428,10 +468,32 @@ function saveRemoteVolumes(volumes: Record<string, number>) {
   }
 }
 
+function getSavedAudioOutputDeviceId() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem(audioOutputDeviceStorageKey) ?? "";
+}
+
+function saveAudioOutputDeviceId(deviceId: string) {
+  if (typeof window !== "undefined") {
+    if (deviceId) {
+      window.localStorage.setItem(audioOutputDeviceStorageKey, deviceId);
+    } else {
+      window.localStorage.removeItem(audioOutputDeviceStorageKey);
+    }
+  }
+}
+
 function clampVoiceSetting(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(1, Math.max(0, value))
     : fallback;
+}
+
+function isMicrophoneChannelMode(value: unknown): value is MicrophoneChannelMode {
+  return microphoneChannelModes.includes(value as MicrophoneChannelMode);
 }
 
 function getSavedVoiceSettings(): MicrophoneProcessingSettings {
@@ -445,6 +507,9 @@ function getSavedVoiceSettings(): MicrophoneProcessingSettings {
     ) as Record<string, unknown>;
 
     return {
+      microphoneChannelMode: isMicrophoneChannelMode(parsed.microphoneChannelMode)
+        ? parsed.microphoneChannelMode
+        : defaultVoiceSettings.microphoneChannelMode,
       noiseGate: clampVoiceSetting(
         parsed.noiseGate,
         defaultVoiceSettings.noiseGate,
@@ -464,6 +529,11 @@ function saveVoiceSettings(settings: MicrophoneProcessingSettings) {
     window.localStorage.setItem(
       voiceSettingsStorageKey,
       JSON.stringify({
+        microphoneChannelMode: isMicrophoneChannelMode(
+          settings.microphoneChannelMode,
+        )
+          ? settings.microphoneChannelMode
+          : defaultVoiceSettings.microphoneChannelMode,
         noiseGate: Math.min(1, Math.max(0, settings.noiseGate)),
         noiseReduction: Math.min(1, Math.max(0, settings.noiseReduction)),
       }),
@@ -489,19 +559,162 @@ function saveMicrophoneDeviceId(deviceId: string) {
   }
 }
 
-function microphoneConstraints(
-  settings: MicrophoneProcessingSettings,
+const browserProcessingBypassDevicePatterns = [
+  "aggregate",
+  "apollo",
+  "audient",
+  "behringer",
+  "blackhole",
+  "clarett",
+  "evo",
+  "focusrite",
+  "loopback",
+  "m-audio",
+  "motu",
+  "obs",
+  "presonus",
+  "rode",
+  "rode caster",
+  "rodecaster",
+  "scarlett",
+  "shure",
+  "soundflower",
+  "steinberg",
+  "tascam",
+  "umc",
+  "virtual",
+  "volt",
+];
+
+function shouldBypassBrowserMicrophoneProcessing(deviceLabel: string) {
+  const normalizedLabel = deviceLabel.trim().toLowerCase();
+
+  return Boolean(
+    normalizedLabel &&
+      browserProcessingBypassDevicePatterns.some((pattern) =>
+        normalizedLabel.includes(pattern),
+      ),
+  );
+}
+
+function getMicrophoneDeviceLabel(
+  devices: MediaDeviceInfo[],
   deviceId: string,
-): MediaTrackConstraints {
+) {
+  if (!deviceId) {
+    return "";
+  }
+
+  return devices.find((device) => device.deviceId === deviceId)?.label ?? "";
+}
+
+function browserMicrophoneProcessingConstraints(deviceLabel: string) {
+  const bypassBrowserProcessing =
+    shouldBypassBrowserMicrophoneProcessing(deviceLabel);
+
   return {
     autoGainControl: false,
-    channelCount: 1,
+    echoCancellation: !bypassBrowserProcessing,
+    noiseSuppression: false,
+  };
+}
+
+function microphoneChannelCountConstraint(
+  deviceLabel: string,
+  channelMode: MicrophoneChannelMode,
+) {
+  if (
+    channelMode !== "auto" ||
+    shouldBypassBrowserMicrophoneProcessing(deviceLabel)
+  ) {
+    return { ideal: 2 };
+  }
+
+  return { ideal: 1 };
+}
+
+function stopMediaStream(stream: MediaStream) {
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
+}
+
+function isPermissionDeniedMediaError(error: unknown) {
+  return (
+    error instanceof DOMException &&
+    (error.name === "NotAllowedError" || error.name === "SecurityError")
+  );
+}
+
+async function getUserMediaWithTimeout(
+  constraints: MediaStreamConstraints,
+): Promise<MediaStream> {
+  let didTimeout = false;
+  let timeoutId: number | undefined;
+  const mediaRequest = navigator.mediaDevices.getUserMedia(constraints);
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      reject(new Error("media-request-timeout"));
+    }, mediaRequestTimeoutMs);
+  });
+
+  void mediaRequest.then((stream) => {
+    if (didTimeout) {
+      stopMediaStream(stream);
+    }
+  }, () => undefined);
+
+  try {
+    return await Promise.race([mediaRequest, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
+function applyMicrophoneTrackConstraints(
+  track: MediaStreamTrack,
+  deviceLabel: string,
+  channelMode: MicrophoneChannelMode,
+) {
+  void track
+    .applyConstraints({
+      ...browserMicrophoneProcessingConstraints(deviceLabel),
+      channelCount: microphoneChannelCountConstraint(deviceLabel, channelMode),
+    })
+    .catch(() => undefined);
+}
+
+function microphoneConstraints(
+  deviceId: string,
+  deviceLabel: string,
+  channelMode: MicrophoneChannelMode,
+): MediaTrackConstraints {
+  return {
+    ...browserMicrophoneProcessingConstraints(deviceLabel),
+    channelCount: microphoneChannelCountConstraint(deviceLabel, channelMode),
     deviceId: deviceId ? { exact: deviceId } : undefined,
-    echoCancellation: true,
-    noiseSuppression: settings.noiseReduction > 0.05,
     sampleRate: { ideal: 48000 },
     sampleSize: { ideal: 16 },
   };
+}
+
+function microphoneChannelModeLabel(
+  language: Language,
+  mode: MicrophoneChannelMode,
+) {
+  switch (mode) {
+    case "auto":
+      return t(language, "microphoneChannelAuto");
+    case "input1":
+      return t(language, "microphoneChannelInput1");
+    case "input2":
+      return t(language, "microphoneChannelInput2");
+    case "mix":
+      return t(language, "microphoneChannelMix");
+  }
 }
 
 function stopSpeakingMonitor(
@@ -709,6 +922,7 @@ function attachStreamToAudio(
   stream: MediaStream | null,
   volume = 1,
   muted = false,
+  outputDeviceId = "",
 ) {
   if (!audio) {
     return;
@@ -720,10 +934,47 @@ function attachStreamToAudio(
 
   audio.muted = muted;
   audio.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
+  applyAudioOutputDevice(audio, outputDeviceId);
 
   if (stream) {
     void audio.play().catch(() => undefined);
   }
+}
+
+type HTMLAudioElementWithSinkId = HTMLAudioElement & {
+  sinkId?: string;
+  setSinkId?: (sinkId: string) => Promise<void>;
+};
+
+function canSelectAudioOutputDevice() {
+  if (typeof document === "undefined") {
+    return false;
+  }
+
+  return (
+    typeof (document.createElement("audio") as HTMLAudioElementWithSinkId)
+      .setSinkId === "function"
+  );
+}
+
+function applyAudioOutputDevice(
+  audio: HTMLAudioElement | null,
+  outputDeviceId: string,
+) {
+  if (!audio) {
+    return;
+  }
+
+  const outputAudio = audio as HTMLAudioElementWithSinkId;
+
+  if (
+    typeof outputAudio.setSinkId !== "function" ||
+    outputAudio.sinkId === outputDeviceId
+  ) {
+    return;
+  }
+
+  void outputAudio.setSinkId(outputDeviceId).catch(() => undefined);
 }
 
 function clampQualityNumber(value: number, min: number, max: number) {
@@ -807,6 +1058,25 @@ function findSenderForTrack(
     peerConnection.getSenders().find((sender) => sender.track?.id === track.id) ??
     null
   );
+}
+
+function clearTurnFallbackTimer(peerState: PeerConnectionState) {
+  if (peerState.turnFallbackTimerId !== null) {
+    window.clearTimeout(peerState.turnFallbackTimerId);
+    peerState.turnFallbackTimerId = null;
+  }
+}
+
+function hasConnectedIcePath(peerConnection: RTCPeerConnection) {
+  return (
+    peerConnection.connectionState === "connected" ||
+    peerConnection.iceConnectionState === "connected" ||
+    peerConnection.iceConnectionState === "completed"
+  );
+}
+
+function isRelayOnlyPeerConnection(peerConnection: RTCPeerConnection) {
+  return peerConnection.getConfiguration().iceTransportPolicy === "relay";
 }
 
 function reportNumber(report: RTCStats | Record<string, unknown>, key: string) {
@@ -927,6 +1197,7 @@ function createRemoteParticipant(participant: PublicParticipant): RemoteParticip
     hasVideo: false,
     isSpeaking: false,
     partialCaption: null,
+    screenAudioStream: new MediaStream(),
     screenStream: new MediaStream(),
     screenStreamId: "",
   };
@@ -1422,6 +1693,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const captionPipWindowRef = useRef<Window | null>(null);
   const captionVideoPipRef = useRef<CaptionVideoPipController | null>(null);
   const volumeButtonRef = useRef<HTMLButtonElement>(null);
+  const fullscreenVolumeButtonRef = useRef<HTMLButtonElement>(null);
   const volumeMixerRef = useRef<HTMLDivElement>(null);
   const dockConversationModeButtonRef = useRef<HTMLButtonElement>(null);
   const fullscreenConversationModeButtonRef = useRef<HTMLButtonElement>(null);
@@ -1431,6 +1703,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const audioInputGainRef = useRef<((gain: number) => void) | null>(null);
   const audioInputProcessingRef =
     useRef<((settings: MicrophoneProcessingSettings) => void) | null>(null);
+  const audioLevelUnsubscribeRef = useRef<(() => void) | null>(null);
+  const pendingNoiseReductionTimeoutRef = useRef<number | null>(null);
+  const pendingNoiseReductionValueRef = useRef<number | null>(null);
   const rawMicrophoneStreamRef = useRef<MediaStream | null>(null);
   const selfMonitorAudioRef = useRef<HTMLAudioElement>(null);
   const selfMonitorStreamRef = useRef<MediaStream | null>(null);
@@ -1448,7 +1723,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const remoteSpeakingMonitorsRef = useRef<Map<string, SpeakingMonitor>>(new Map());
   const remoteSpeakingValuesRef = useRef<Map<string, boolean>>(new Map());
   const peerConnectionsRef = useRef<Map<string, PeerConnectionState>>(new Map());
-  const remoteVideoTrackStreamIdsRef = useRef<Map<string, Map<string, string>>>(
+  const remoteTrackStreamIdsRef = useRef<Map<string, Map<string, string>>>(
     new Map(),
   );
   const screenShareStatsSampleRef = useRef<{
@@ -1505,20 +1780,36 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const [masterOutputVolume, setMasterOutputVolume] = useState(() =>
     getSavedVolume(masterOutputVolumeStorageKey, defaultMasterOutputVolume),
   );
+  const [screenShareAudioVolume, setScreenShareAudioVolume] = useState(() =>
+    getSavedVolume(screenShareAudioVolumeStorageKey, defaultScreenShareAudioVolume),
+  );
   const [remoteVolumes, setRemoteVolumes] = useState<Record<string, number>>({});
   const [voiceSettings, setVoiceSettings] = useState<MicrophoneProcessingSettings>(
     () => getSavedVoiceSettings(),
   );
+  const [noiseReductionDraft, setNoiseReductionDraft] = useState(
+    () => getSavedVoiceSettings().noiseReduction,
+  );
+  const [microphoneLevel, setMicrophoneLevel] =
+    useState<MicrophoneLevelSnapshot>(idleMicrophoneLevelSnapshot);
   const [selectedMicrophoneDeviceId, setSelectedMicrophoneDeviceId] = useState(
     () => getSavedMicrophoneDeviceId(),
   );
+  const [selectedAudioOutputDeviceId, setSelectedAudioOutputDeviceId] = useState(
+    () => getSavedAudioOutputDeviceId(),
+  );
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [isAudioOutputSelectionSupported, setIsAudioOutputSelectionSupported] =
+    useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [isTestingMicrophone, setIsTestingMicrophone] = useState(false);
   const [isReplacingMicrophone, setIsReplacingMicrophone] = useState(false);
   const [startWithCameraOff, setStartWithCameraOff] = useState(false);
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
+  const [mediaPreparationStep, setMediaPreparationStep] =
+    useState<MediaPreparationStep>("idle");
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
   const [mediaLayoutMode, setMediaLayoutMode] =
@@ -1570,9 +1861,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
   const remoteParticipantsRef = useRef(remoteParticipants);
   const localInputVolumeRef = useRef(localInputVolume);
   const masterOutputVolumeRef = useRef(masterOutputVolume);
+  const screenShareAudioVolumeRef = useRef(screenShareAudioVolume);
   const remoteVolumesRef = useRef(remoteVolumes);
   const voiceSettingsRef = useRef(voiceSettings);
   const selectedMicrophoneDeviceIdRef = useRef(selectedMicrophoneDeviceId);
+  const selectedAudioOutputDeviceIdRef = useRef(selectedAudioOutputDeviceId);
+  const microphoneDevicesRef = useRef<MediaDeviceInfo[]>([]);
+  const audioOutputDevicesRef = useRef<MediaDeviceInfo[]>([]);
   const isMutedRef = useRef(isMuted);
   const isDeafenedRef = useRef(isDeafened);
 
@@ -1755,13 +2050,34 @@ export function CallRoom({ roomId }: { roomId: string }) {
     saveVoiceSettings(voiceSettings);
 
     for (const track of rawMicrophoneStreamRef.current?.getAudioTracks() ?? []) {
-      void track
-        .applyConstraints({
-          noiseSuppression: voiceSettings.noiseReduction > 0.05,
-        })
-        .catch(() => undefined);
+      const deviceLabel =
+        track.label ||
+        getMicrophoneDeviceLabel(
+          microphoneDevicesRef.current,
+          selectedMicrophoneDeviceIdRef.current,
+        );
+      applyMicrophoneTrackConstraints(
+        track,
+        deviceLabel,
+        voiceSettings.microphoneChannelMode,
+      );
     }
   }, [voiceSettings]);
+
+  useEffect(() => {
+    setNoiseReductionDraft(voiceSettings.noiseReduction);
+  }, [voiceSettings.noiseReduction]);
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof window !== "undefined" &&
+        pendingNoiseReductionTimeoutRef.current !== null
+      ) {
+        window.clearTimeout(pendingNoiseReductionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     selectedMicrophoneDeviceIdRef.current = selectedMicrophoneDeviceId;
@@ -1770,6 +2086,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
   useEffect(() => {
     masterOutputVolumeRef.current = masterOutputVolume;
   }, [masterOutputVolume]);
+
+  useEffect(() => {
+    screenShareAudioVolumeRef.current = screenShareAudioVolume;
+  }, [screenShareAudioVolume]);
 
   useEffect(() => {
     remoteVolumesRef.current = remoteVolumes;
@@ -1785,6 +2105,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
         (first, second) => first.joinedAt - second.joinedAt,
       ),
     [remoteParticipants],
+  );
+  const displayedVoiceSettings = useMemo(
+    () => ({
+      ...voiceSettings,
+      noiseReduction: noiseReductionDraft,
+    }),
+    [noiseReductionDraft, voiceSettings],
   );
   const participantCount =
     (callState === "idle" && roomInfo ? roomInfo.participantCount : 1 + remoteList.length);
@@ -1935,9 +2262,29 @@ export function CallRoom({ roomId }: { roomId: string }) {
         (remoteVolumesRef.current[participant.participantId] ?? 1) *
           masterOutputVolumeRef.current,
         isDeafenedRef.current,
+        selectedAudioOutputDeviceIdRef.current,
+      );
+      attachStreamToAudio(
+        document.querySelector<HTMLAudioElement>(
+          `audio[data-screen-audio-participant-id="${participant.participantId}"]`,
+        ),
+        participant.screenAudioStream,
+        screenShareAudioVolumeRef.current * masterOutputVolumeRef.current,
+        isDeafenedRef.current,
+        selectedAudioOutputDeviceIdRef.current,
       );
     }
   }, []);
+
+  useEffect(() => {
+    selectedAudioOutputDeviceIdRef.current = selectedAudioOutputDeviceId;
+    saveAudioOutputDeviceId(selectedAudioOutputDeviceId);
+    applyAudioOutputDevice(
+      selfMonitorAudioRef.current,
+      selectedAudioOutputDeviceId,
+    );
+    playRemoteAudio();
+  }, [playRemoteAudio, selectedAudioOutputDeviceId]);
 
   useEffect(() => {
     isDeafenedRef.current = isDeafened;
@@ -1981,6 +2328,38 @@ export function CallRoom({ roomId }: { roomId: string }) {
     [roomId],
   );
 
+  const enableTurnFallbackIceServers = useCallback(
+    (peerState: PeerConnectionState) => {
+      if (peerState.turnFallbackEnabled) {
+        return Promise.resolve(true);
+      }
+
+      if (peerState.turnFallbackIceServersPromise) {
+        return peerState.turnFallbackIceServersPromise;
+      }
+
+      const promise = refreshIceServersForRoom(peerState.peerConnection).then(
+        (enabled) => {
+          if (enabled) {
+            peerState.turnFallbackEnabled = true;
+          }
+
+          return enabled;
+        },
+      );
+      peerState.turnFallbackIceServersPromise = promise;
+      const clearPendingPromise = () => {
+        if (peerState.turnFallbackIceServersPromise === promise) {
+          peerState.turnFallbackIceServersPromise = null;
+        }
+      };
+      void promise.then(clearPendingPromise, clearPendingPromise);
+
+      return promise;
+    },
+    [refreshIceServersForRoom],
+  );
+
   const flushPendingIceCandidates = useCallback(
     async (peerState: PeerConnectionState) => {
       if (!peerState.peerConnection.remoteDescription) {
@@ -2005,9 +2384,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
+      clearTurnFallbackTimer(peerState);
       closePeerConnection(peerState.peerConnection);
       peerConnectionsRef.current.delete(participantId);
-      remoteVideoTrackStreamIdsRef.current.delete(participantId);
+      remoteTrackStreamIdsRef.current.delete(participantId);
     },
     [],
   );
@@ -2141,6 +2521,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
+      if (iceRestart) {
+        peerState.needsIceRestart = true;
+      }
+
       if (
         peerState.makingOffer ||
         peerState.peerConnection.signalingState !== "stable"
@@ -2149,21 +2533,27 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
-      await refreshIceServersForRoom(peerState.peerConnection).catch(() => false);
+      if (isRelayOnlyPeerConnection(peerState.peerConnection)) {
+        await enableTurnFallbackIceServers(peerState).catch(() => false);
+      }
+
       peerState.makingOffer = true;
       peerState.needsNegotiation = false;
 
       try {
+        const shouldRestartIce = peerState.needsIceRestart;
         const offer = await peerState.peerConnection.createOffer({
-          iceRestart,
+          iceRestart: shouldRestartIce,
           offerToReceiveAudio: true,
           offerToReceiveVideo: true,
         });
         await peerState.peerConnection.setLocalDescription(offer);
+        peerState.needsIceRestart = false;
         socket.emit("webrtc:offer", {
           roomId,
           toParticipantId: participantId,
           description: peerState.peerConnection.localDescription,
+          iceRestart: shouldRestartIce,
         });
       } finally {
         peerState.makingOffer = false;
@@ -2172,11 +2562,65 @@ export function CallRoom({ roomId }: { roomId: string }) {
           peerState.needsNegotiation &&
           peerState.peerConnection.signalingState === "stable"
         ) {
-          void createAndSendOffer(participantId, { iceRestart });
+          void createAndSendOffer(participantId);
         }
       }
     },
-    [refreshIceServersForRoom, roomId, socket],
+    [enableTurnFallbackIceServers, roomId, socket],
+  );
+
+  const startTurnFallbackForPeer = useCallback(
+    async (participantId: string) => {
+      const peerState = peerConnectionsRef.current.get(participantId);
+
+      if (
+        !peerState ||
+        hasEndedCallRef.current ||
+        peerState.turnFallbackAttempted ||
+        peerState.peerConnection.connectionState === "closed" ||
+        hasConnectedIcePath(peerState.peerConnection)
+      ) {
+        return;
+      }
+
+      clearTurnFallbackTimer(peerState);
+      peerState.turnFallbackAttempted = true;
+
+      const enabled = await enableTurnFallbackIceServers(peerState).catch(
+        () => false,
+      );
+      const currentPeerState = peerConnectionsRef.current.get(participantId);
+
+      if (!enabled || currentPeerState !== peerState) {
+        return;
+      }
+
+      await createAndSendOffer(participantId, { iceRestart: true });
+    },
+    [createAndSendOffer, enableTurnFallbackIceServers],
+  );
+
+  const scheduleTurnFallbackForPeer = useCallback(
+    (participantId: string, delayMs: number) => {
+      const peerState = peerConnectionsRef.current.get(participantId);
+
+      if (
+        !peerState ||
+        hasEndedCallRef.current ||
+        peerState.turnFallbackAttempted ||
+        peerState.turnFallbackTimerId !== null ||
+        peerState.peerConnection.connectionState === "closed" ||
+        hasConnectedIcePath(peerState.peerConnection)
+      ) {
+        return;
+      }
+
+      peerState.turnFallbackTimerId = window.setTimeout(() => {
+        peerState.turnFallbackTimerId = null;
+        void startTurnFallbackForPeer(participantId);
+      }, delayMs);
+    },
+    [startTurnFallbackForPeer],
   );
 
   const ensurePeerConnection = useCallback(
@@ -2195,6 +2639,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
         makingOffer: false,
         ignoreOffer: false,
         needsNegotiation: false,
+        needsIceRestart: false,
+        turnFallbackAttempted: false,
+        turnFallbackIceServersPromise: null,
+        turnFallbackTimerId: null,
+        turnFallbackEnabled: false,
         screenSender: null,
       };
 
@@ -2226,10 +2675,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
       peerConnection.ontrack = (event) => {
         const incomingStreamId = event.streams[0]?.id ?? "";
         const trackStreamIds =
-          remoteVideoTrackStreamIdsRef.current.get(participantId) ?? new Map();
-        remoteVideoTrackStreamIdsRef.current.set(participantId, trackStreamIds);
+          remoteTrackStreamIdsRef.current.get(participantId) ?? new Map();
+        remoteTrackStreamIdsRef.current.set(participantId, trackStreamIds);
 
-        if (event.track.kind === "video") {
+        if (event.track.kind === "audio" || event.track.kind === "video") {
           trackStreamIds.set(event.track.id, incomingStreamId);
         }
 
@@ -2244,12 +2693,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
             lastSeenAt: Date.now(),
           });
         const isScreenTrack =
-          event.track.kind === "video" &&
           Boolean(participant.screenStreamId) &&
           participant.screenStreamId === incomingStreamId;
         const targetStream =
           event.track.kind === "audio"
-            ? participant.audioStream
+            ? isScreenTrack
+              ? participant.screenAudioStream
+              : participant.audioStream
             : isScreenTrack
               ? participant.screenStream
               : participant.cameraStream;
@@ -2259,21 +2709,29 @@ export function CallRoom({ roomId }: { roomId: string }) {
         }
 
         event.track.onended = () => {
-          targetStream.removeTrack(event.track);
           trackStreamIds.delete(event.track.id);
-          updateRemoteParticipant(participantId, (current) => ({
-            ...current,
-            hasScreenShare: current.screenStream
-              .getVideoTracks()
-              .some((track) => track.readyState === "live"),
-            hasVideo: current.cameraStream
-              .getVideoTracks()
-              .some((track) => track.readyState === "live"),
-          }));
+          updateRemoteParticipant(participantId, (current) => {
+            current.audioStream.removeTrack(event.track);
+            current.screenAudioStream.removeTrack(event.track);
+            current.cameraStream.removeTrack(event.track);
+            current.screenStream.removeTrack(event.track);
+
+            return {
+              ...current,
+              hasScreenShare: current.screenStream
+                .getVideoTracks()
+                .some((track) => track.readyState === "live"),
+              hasVideo: current.cameraStream
+                .getVideoTracks()
+                .some((track) => track.readyState === "live"),
+            };
+          });
+          window.setTimeout(playRemoteAudio, 0);
         };
 
         if (
           event.track.kind === "audio" &&
+          targetStream === participant.audioStream &&
           participant.audioStream
             .getAudioTracks()
             .some((track) => track.readyState === "live")
@@ -2297,16 +2755,45 @@ export function CallRoom({ roomId }: { roomId: string }) {
         window.setTimeout(playRemoteAudio, 0);
       };
 
+      peerConnection.oniceconnectionstatechange = () => {
+        const state = peerConnection.iceConnectionState;
+
+        if (state === "connected" || state === "completed" || state === "closed") {
+          clearTurnFallbackTimer(peerState);
+        } else if (state === "checking") {
+          scheduleTurnFallbackForPeer(participantId, turnFallbackIceTimeoutMs);
+        } else if (state === "disconnected") {
+          scheduleTurnFallbackForPeer(
+            participantId,
+            turnFallbackDisconnectedTimeoutMs,
+          );
+        } else if (state === "failed") {
+          void startTurnFallbackForPeer(participantId);
+        }
+      };
+
       peerConnection.onconnectionstatechange = () => {
         const state = peerConnection.connectionState;
 
         if (state === "connected") {
+          clearTurnFallbackTimer(peerState);
           setCallState("connected");
         } else if (state === "connecting") {
+          scheduleTurnFallbackForPeer(participantId, turnFallbackIceTimeoutMs);
           setCallState("connecting");
         } else if (state === "disconnected") {
+          scheduleTurnFallbackForPeer(
+            participantId,
+            turnFallbackDisconnectedTimeoutMs,
+          );
           setCallState("reconnecting");
         } else if (state === "failed" || state === "closed") {
+          if (state === "failed") {
+            void startTurnFallbackForPeer(participantId);
+          } else {
+            clearTurnFallbackTimer(peerState);
+          }
+
           setCallState((current) =>
             current === "disconnected" ? current : "reconnecting",
           );
@@ -2322,7 +2809,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
       createAndSendOffer,
       playRemoteAudio,
       roomId,
+      scheduleTurnFallbackForPeer,
       socket,
+      startTurnFallbackForPeer,
       startRemoteSpeakingMonitor,
       updateRemoteParticipant,
     ],
@@ -2344,16 +2833,26 @@ export function CallRoom({ roomId }: { roomId: string }) {
       typeof navigator === "undefined" ||
       !navigator.mediaDevices?.enumerateDevices
     ) {
+      microphoneDevicesRef.current = [];
+      audioOutputDevicesRef.current = [];
       setMicrophoneDevices([]);
+      setAudioOutputDevices([]);
+      setIsAudioOutputSelectionSupported(false);
       return;
     }
 
+    setIsAudioOutputSelectionSupported(canSelectAudioOutputDevice());
     const devices = await navigator.mediaDevices
       .enumerateDevices()
       .catch(() => []);
-    setMicrophoneDevices(
-      devices.filter((device) => device.kind === "audioinput"),
+    const audioInputDevices = devices.filter(
+      (device) => device.kind === "audioinput",
     );
+    const outputDevices = devices.filter((device) => device.kind === "audiooutput");
+    microphoneDevicesRef.current = audioInputDevices;
+    audioOutputDevicesRef.current = outputDevices;
+    setMicrophoneDevices(audioInputDevices);
+    setAudioOutputDevices(outputDevices);
   }, []);
 
   const stopLocalSubtitleCapture = useCallback(() => {
@@ -2404,20 +2903,74 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [startLocalSubtitleCapture]);
 
   const createProcessedMicrophoneStream = useCallback(async () => {
-    const rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: microphoneConstraints(
-        voiceSettingsRef.current,
-        selectedMicrophoneDeviceIdRef.current,
-      ),
-      video: false,
-    });
+    const deviceId = selectedMicrophoneDeviceIdRef.current;
+    const savedDeviceIsListed =
+      !deviceId ||
+      microphoneDevicesRef.current.length === 0 ||
+      microphoneDevicesRef.current.some((device) => device.deviceId === deviceId);
+    const requestedDeviceId = savedDeviceIsListed ? deviceId : "";
+    const deviceLabel = getMicrophoneDeviceLabel(
+      microphoneDevicesRef.current,
+      requestedDeviceId,
+    );
+    let rawStream: MediaStream;
+
+    setMediaPreparationStep(
+      !deviceId || requestedDeviceId ? "microphone" : "microphoneFallback",
+    );
+
+    try {
+      rawStream = await getUserMediaWithTimeout({
+        audio: microphoneConstraints(
+          requestedDeviceId,
+          deviceLabel,
+          voiceSettingsRef.current.microphoneChannelMode,
+        ),
+        video: false,
+      });
+    } catch (mediaError) {
+      if (!requestedDeviceId || isPermissionDeniedMediaError(mediaError)) {
+        throw mediaError;
+      }
+
+      setMediaPreparationStep("microphoneFallback");
+      selectedMicrophoneDeviceIdRef.current = "";
+      setSelectedMicrophoneDeviceId("");
+      saveMicrophoneDeviceId("");
+      rawStream = await getUserMediaWithTimeout({
+        audio: microphoneConstraints(
+          "",
+          "",
+          voiceSettingsRef.current.microphoneChannelMode,
+        ),
+        video: false,
+      });
+    }
+
+    if (deviceId && !requestedDeviceId) {
+      selectedMicrophoneDeviceIdRef.current = "";
+      setSelectedMicrophoneDeviceId("");
+      saveMicrophoneDeviceId("");
+    }
+
+    const rawTrackLabel = rawStream.getAudioTracks()[0]?.label ?? deviceLabel;
+
+    await refreshMicrophoneDevices();
+
+    for (const track of rawStream.getAudioTracks()) {
+      applyMicrophoneTrackConstraints(
+        track,
+        rawTrackLabel,
+        voiceSettingsRef.current.microphoneChannelMode,
+      );
+    }
+
+    setMediaPreparationStep("voice");
     const enhancedMicrophone = await createEnhancedMicrophoneStream(
       rawStream,
       localInputVolumeRef.current,
       voiceSettingsRef.current,
     );
-
-    void refreshMicrophoneDevices();
 
     return {
       enhancedMicrophone,
@@ -2504,6 +3057,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     audioEnhancementStopRef.current = enhancedMicrophone.stop;
     audioInputGainRef.current = enhancedMicrophone.setGain;
     audioInputProcessingRef.current = enhancedMicrophone.setProcessing;
+    audioLevelUnsubscribeRef.current?.();
+    audioLevelUnsubscribeRef.current =
+      enhancedMicrophone.subscribeLevels(setMicrophoneLevel);
     rawMicrophoneStreamRef.current = rawStream;
     previousStop?.();
     stopLocalSpeakingMonitor();
@@ -2549,10 +3105,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     audioEnhancementStopRef.current?.();
+    audioLevelUnsubscribeRef.current?.();
     audioEnhancementStopRef.current = null;
     audioInputGainRef.current = null;
     audioInputProcessingRef.current = null;
+    audioLevelUnsubscribeRef.current = null;
     rawMicrophoneStreamRef.current = null;
+    setMicrophoneLevel(idleMicrophoneLevelSnapshot);
   }, []);
 
   const resetLocalMediaState = useCallback(() => {
@@ -2587,7 +3146,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     }
 
     setRemoteParticipants({});
-    remoteVideoTrackStreamIdsRef.current.clear();
+    remoteTrackStreamIdsRef.current.clear();
   }, [stopRemoteSpeakingMonitor]);
 
   const tearDownActiveCall = useCallback(() => {
@@ -2630,6 +3189,11 @@ export function CallRoom({ roomId }: { roomId: string }) {
       masterOutputVolumeStorageKey,
       defaultMasterOutputVolume,
     );
+    const savedScreenShareAudioVolume = getSavedVolume(
+      screenShareAudioVolumeStorageKey,
+      defaultScreenShareAudioVolume,
+    );
+    const savedAudioOutputDeviceId = getSavedAudioOutputDeviceId();
     setLanguage(savedLanguage);
     setMediaLayoutMode(getSavedMediaLayoutMode());
     setFullscreenConversationMode("visible");
@@ -2637,8 +3201,12 @@ export function CallRoom({ roomId }: { roomId: string }) {
     saveFullscreenConversationMode("visible");
     localInputVolumeRef.current = savedLocalInputVolume;
     masterOutputVolumeRef.current = savedMasterOutputVolume;
+    screenShareAudioVolumeRef.current = savedScreenShareAudioVolume;
+    selectedAudioOutputDeviceIdRef.current = savedAudioOutputDeviceId;
     setLocalInputVolume(savedLocalInputVolume);
     setMasterOutputVolume(savedMasterOutputVolume);
+    setScreenShareAudioVolume(savedScreenShareAudioVolume);
+    setSelectedAudioOutputDeviceId(savedAudioOutputDeviceId);
     setRemoteVolumes(getSavedRemoteVolumes());
 
     if (savedLanguage) {
@@ -2814,7 +3382,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
       if (
         volumeMixerRef.current?.contains(target) ||
-        volumeButtonRef.current?.contains(target)
+        volumeButtonRef.current?.contains(target) ||
+        fullscreenVolumeButtonRef.current?.contains(target)
       ) {
         return;
       }
@@ -3116,6 +3685,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
     async function handleOffer(payload: {
       description: RTCSessionDescriptionInit;
       from: string;
+      iceRestart?: boolean;
     }) {
       if (hasEndedCallRef.current || !payload.from) {
         return;
@@ -3132,7 +3702,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
         return;
       }
 
-      await refreshIceServersForRoom(peerState.peerConnection).catch(() => false);
+      if (
+        payload.iceRestart === true ||
+        isRelayOnlyPeerConnection(peerState.peerConnection)
+      ) {
+        await enableTurnFallbackIceServers(peerState).catch(() => false);
+      }
+
       await peerState.peerConnection.setRemoteDescription(payload.description);
       await flushPendingIceCandidates(peerState);
 
@@ -3201,12 +3777,19 @@ export function CallRoom({ roomId }: { roomId: string }) {
       setActiveScreenShareParticipantId(participantId);
       updateRemoteParticipant(participantId, (participant) => {
         const trackStreamIds =
-          remoteVideoTrackStreamIdsRef.current.get(participantId) ?? new Map();
+          remoteTrackStreamIdsRef.current.get(participantId) ?? new Map();
 
         for (const track of participant.cameraStream.getVideoTracks()) {
           if (trackStreamIds.get(track.id) === streamId) {
             participant.cameraStream.removeTrack(track);
             participant.screenStream.addTrack(track);
+          }
+        }
+
+        for (const track of participant.audioStream.getAudioTracks()) {
+          if (trackStreamIds.get(track.id) === streamId) {
+            participant.audioStream.removeTrack(track);
+            participant.screenAudioStream.addTrack(track);
           }
         }
 
@@ -3219,6 +3802,21 @@ export function CallRoom({ roomId }: { roomId: string }) {
           screenStreamId: streamId,
         };
       });
+      window.setTimeout(() => {
+        const participant = remoteParticipantsRef.current[participantId];
+
+        if (
+          participant?.audioStream
+            .getAudioTracks()
+            .some((track) => track.readyState === "live")
+        ) {
+          startRemoteSpeakingMonitor(participantId, participant.audioStream);
+        } else {
+          stopRemoteSpeakingMonitor(participantId);
+        }
+
+        playRemoteAudio();
+      }, 0);
     }
 
     function handleRemoteScreenStopped(payload: { from?: string }) {
@@ -3236,12 +3834,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
           participant.screenStream.removeTrack(track);
         }
 
+        for (const track of participant.screenAudioStream.getTracks()) {
+          participant.screenAudioStream.removeTrack(track);
+        }
+
         return {
           ...participant,
           hasScreenShare: false,
           screenStreamId: "",
         };
       });
+      window.setTimeout(playRemoteAudio, 0);
     }
 
     function handleRemoteCameraStarted(payload: { from?: string }) {
@@ -3481,9 +4084,10 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [
     beginLocalSubtitleCapture,
     callState,
+    enableTurnFallbackIceServers,
     ensurePeerConnection,
     flushPendingIceCandidates,
-    refreshIceServersForRoom,
+    playRemoteAudio,
     rememberParticipantSessionToken,
     removeRemotePeer,
     remoteList.length,
@@ -3492,6 +4096,8 @@ export function CallRoom({ roomId }: { roomId: string }) {
     showSubtitleServiceBanner,
     socket,
     stopLocalSubtitleCapture,
+    stopRemoteSpeakingMonitor,
+    startRemoteSpeakingMonitor,
     tearDownActiveCall,
     updateRemoteParticipant,
     upsertRemoteParticipant,
@@ -3514,7 +4120,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
   }, [roomId, socket, tearDownActiveCall]);
 
   const requestCameraTrack = useCallback(async () => {
-    const videoStream = await navigator.mediaDevices.getUserMedia({
+    const videoStream = await getUserMediaWithTimeout({
       audio: false,
       video: {
         aspectRatio: 16 / 9,
@@ -3554,8 +4160,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       rawMicrophoneStream = createdMicrophone.rawStream;
     } catch (mediaError) {
       throw new Error(
-        mediaError instanceof DOMException &&
-          mediaError.name === "NotAllowedError"
+        isPermissionDeniedMediaError(mediaError)
           ? "microphone-denied"
           : "microphone-unavailable",
       );
@@ -3564,6 +4169,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
     audioEnhancementStopRef.current = enhancedMicrophone.stop;
     audioInputGainRef.current = enhancedMicrophone.setGain;
     audioInputProcessingRef.current = enhancedMicrophone.setProcessing;
+    audioLevelUnsubscribeRef.current?.();
+    audioLevelUnsubscribeRef.current =
+      enhancedMicrophone.subscribeLevels(setMicrophoneLevel);
     rawMicrophoneStreamRef.current = rawMicrophoneStream;
     const combinedStream = new MediaStream(enhancedMicrophone.stream.getAudioTracks());
 
@@ -3576,6 +4184,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
       setCameraError("");
     } else {
       try {
+        setMediaPreparationStep("camera");
         combinedStream.addTrack(await requestCameraTrack());
         setIsCameraEnabled(true);
         setCameraError("");
@@ -3624,6 +4233,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         setError(t(languageRef.current, "microphoneUnavailable"));
       }
     } finally {
+      setMediaPreparationStep("idle");
       setIsPreparingMedia(false);
     }
   }
@@ -3668,102 +4278,178 @@ export function CallRoom({ roomId }: { roomId: string }) {
     [socket],
   );
 
-  async function handleJoinCall(preparedStream?: MediaStream) {
-    playRemoteAudio();
+  const handleJoinCall = useCallback(
+    async (preparedStream?: MediaStream) => {
+      playRemoteAudio();
 
-    if (!language || !roomInfo) {
-      return;
-    }
-
-    setError("");
-    hasEndedCallRef.current = false;
-    setCallState("connecting");
-
-    let stream = preparedStream ?? localStreamRef.current;
-    if (!hasLiveAudioTrack(stream)) {
-      try {
-        stream = await requestMedia();
-      } catch (mediaError) {
-        const message = mediaError instanceof Error ? mediaError.message : "";
-        setCallState("idle");
-
-        if (message === "microphone-denied") {
-          setError(t(language, "microphonePermissionDenied"));
-        } else if (message === "browser-unsupported") {
-          setError(t(language, "browserUnsupported"));
-        } else {
-          setError(t(language, "microphoneUnavailable"));
-        }
-
+      if (!language || !roomInfo) {
         return;
       }
-    }
 
-    try {
-      await connectSocketForRoomJoin({
-        refreshHandshake: roomInfo.isCreator,
-      });
-    } catch {
-      setCallState("idle");
-      setError(t(language, "disconnected"));
-      resetLocalMediaState();
+      stopMicrophoneTestRef.current();
+      setError("");
+      hasEndedCallRef.current = false;
+      setCallState("connecting");
+
+      let stream = preparedStream ?? localStreamRef.current;
+      if (!hasLiveAudioTrack(stream)) {
+        try {
+          stream = await requestMedia();
+        } catch (mediaError) {
+          const message = mediaError instanceof Error ? mediaError.message : "";
+          setCallState("idle");
+
+          if (message === "microphone-denied") {
+            setError(t(language, "microphonePermissionDenied"));
+          } else if (message === "browser-unsupported") {
+            setError(t(language, "browserUnsupported"));
+          } else {
+            setError(t(language, "microphoneUnavailable"));
+          }
+
+          return;
+        }
+      }
+
+      try {
+        await connectSocketForRoomJoin({
+          refreshHandshake: roomInfo.isCreator,
+        });
+      } catch {
+        setCallState("idle");
+        setError(t(language, "disconnected"));
+        resetLocalMediaState();
+        return;
+      }
+
+      socket.emit(
+        "room:join",
+        {
+          roomId,
+          roomCode,
+          participantId: participantIdRef.current,
+          participantSessionToken: participantSessionTokenRef.current,
+          displayName,
+          spokenLanguage: language,
+        },
+        async (response: JoinResponse) => {
+          if (!response.ok) {
+            setCallState("idle");
+            setError(errorForJoinReason(language, response.reason));
+            resetLocalMediaState();
+            return;
+          }
+
+          rememberParticipantSessionToken(response.participantSessionToken);
+          setIsRoomHost(response.isCreator);
+          setIsSubtitleServiceStarted(response.subtitleServiceStarted);
+          setActiveScreenShareParticipantId(
+            response.activeScreenShareParticipantId ?? "",
+          );
+          setRoomInfo((current) =>
+            current
+              ? {
+                  ...current,
+                  maxParticipants: response.maxParticipants,
+                  participantCount: response.participantCount,
+                }
+              : current,
+          );
+
+          for (const participant of response.otherParticipants) {
+            upsertRemoteParticipant(participant);
+            ensurePeerConnection(participant.participantId);
+          }
+
+          setCallState(
+            response.otherParticipants.length > 0 ? "connecting" : "waiting",
+          );
+
+          if (hasLiveVideoTrack(stream)) {
+            socket.emit("media:camera-started", {
+              roomId,
+              from: participantIdRef.current,
+            });
+          }
+
+          if (response.subtitleServiceStarted) {
+            await beginLocalSubtitleCapture();
+          }
+        },
+      );
+    },
+    [
+      beginLocalSubtitleCapture,
+      connectSocketForRoomJoin,
+      displayName,
+      ensurePeerConnection,
+      language,
+      playRemoteAudio,
+      rememberParticipantSessionToken,
+      requestMedia,
+      resetLocalMediaState,
+      roomCode,
+      roomId,
+      roomInfo,
+      socket,
+      upsertRemoteParticipant,
+    ],
+  );
+
+  useEffect(() => {
+    if (
+      callState !== "idle" ||
+      !isMediaReady ||
+      isPreparingMedia ||
+      !roomInfo ||
+      !hasLiveAudioTrack(localStreamRef.current) ||
+      showSettings ||
+      showVoiceSettings ||
+      showLayoutPicker ||
+      showLeaveConfirmation ||
+      showScreenShareSettings ||
+      surfacePickerTarget
+    ) {
       return;
     }
 
-    socket.emit(
-      "room:join",
-      {
-        roomId,
-        roomCode,
-        participantId: participantIdRef.current,
-        participantSessionToken: participantSessionTokenRef.current,
-        displayName,
-        spokenLanguage: language,
-      },
-      async (response: JoinResponse) => {
-        if (!response.ok) {
-          setCallState("idle");
-          setError(errorForJoinReason(language, response.reason));
-          resetLocalMediaState();
-          return;
-        }
+    function handlePreviewKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Enter" || event.repeat) {
+        return;
+      }
 
-        rememberParticipantSessionToken(response.participantSessionToken);
-        setIsRoomHost(response.isCreator);
-        setIsSubtitleServiceStarted(response.subtitleServiceStarted);
-        setActiveScreenShareParticipantId(response.activeScreenShareParticipantId ?? "");
-        setRoomInfo((current) =>
-          current
-            ? {
-                ...current,
-                maxParticipants: response.maxParticipants,
-                participantCount: response.participantCount,
-              }
-            : current,
-        );
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
 
-        for (const participant of response.otherParticipants) {
-          upsertRemoteParticipant(participant);
-          ensurePeerConnection(participant.participantId);
-        }
+      event.preventDefault();
+      void handleJoinCall();
+    }
 
-        setCallState(
-          response.otherParticipants.length > 0 ? "connecting" : "waiting",
-        );
+    document.addEventListener("keydown", handlePreviewKeyDown);
 
-        if (hasLiveVideoTrack(stream)) {
-          socket.emit("media:camera-started", {
-            roomId,
-            from: participantIdRef.current,
-          });
-        }
-
-        if (response.subtitleServiceStarted) {
-          await beginLocalSubtitleCapture();
-        }
-      },
-    );
-  }
+    return () => {
+      document.removeEventListener("keydown", handlePreviewKeyDown);
+    };
+  }, [
+    callState,
+    handleJoinCall,
+    isMediaReady,
+    isPreparingMedia,
+    roomInfo,
+    showLayoutPicker,
+    showLeaveConfirmation,
+    showScreenShareSettings,
+    showSettings,
+    showVoiceSettings,
+    surfacePickerTarget,
+  ]);
 
   function handleLanguageSelect(nextLanguage: Language) {
     saveLanguage(nextLanguage);
@@ -4038,6 +4724,17 @@ export function CallRoom({ roomId }: { roomId: string }) {
       screenTrack.onended = () => {
         void stopScreenShare();
       };
+      for (const audioTrack of screenStream.getAudioTracks()) {
+        audioTrack.onended = () => {
+          if (
+            !screenStream
+              .getAudioTracks()
+              .some((track) => track.readyState === "live")
+          ) {
+            window.requestAnimationFrame(playRemoteAudio);
+          }
+        };
+      }
 
       const screenSenders: Array<RTCRtpSender | null> = [];
 
@@ -4047,6 +4744,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
           screenStream,
         );
         screenSenders.push(peerState.screenSender);
+        for (const audioTrack of screenStream.getAudioTracks()) {
+          peerState.peerConnection.addTrack(audioTrack, screenStream);
+        }
       }
 
       await applyScreenShareQualityToTrack(settings, screenTrack, screenSenders);
@@ -4331,23 +5031,131 @@ export function CallRoom({ roomId }: { roomId: string }) {
     saveTheme(nextTheme);
   }
 
+  function parseVoiceRangeValue(value: string) {
+    const nextValue = Number(value);
+
+    if (!Number.isFinite(nextValue)) {
+      return null;
+    }
+
+    return Math.min(1, Math.max(0, nextValue / 100));
+  }
+
+  function clearPendingNoiseReductionCommit() {
+    if (
+      typeof window !== "undefined" &&
+      pendingNoiseReductionTimeoutRef.current !== null
+    ) {
+      window.clearTimeout(pendingNoiseReductionTimeoutRef.current);
+    }
+
+    pendingNoiseReductionTimeoutRef.current = null;
+    pendingNoiseReductionValueRef.current = null;
+  }
+
+  function commitNoiseReduction(value: number) {
+    clearPendingNoiseReductionCommit();
+    setNoiseReductionDraft(value);
+    setVoiceSettings((current) =>
+      Math.abs(current.noiseReduction - value) < 0.001
+        ? current
+        : {
+            ...current,
+            noiseReduction: value,
+          },
+    );
+  }
+
+  function scheduleNoiseReductionCommit(value: number) {
+    setNoiseReductionDraft(value);
+    pendingNoiseReductionValueRef.current = value;
+
+    if (
+      typeof window !== "undefined" &&
+      pendingNoiseReductionTimeoutRef.current !== null
+    ) {
+      window.clearTimeout(pendingNoiseReductionTimeoutRef.current);
+    }
+
+    if (typeof window === "undefined") {
+      commitNoiseReduction(value);
+      return;
+    }
+
+    pendingNoiseReductionTimeoutRef.current = window.setTimeout(() => {
+      const pendingValue = pendingNoiseReductionValueRef.current;
+      pendingNoiseReductionTimeoutRef.current = null;
+      pendingNoiseReductionValueRef.current = null;
+
+      if (pendingValue === null) {
+        return;
+      }
+
+      setVoiceSettings((current) =>
+        Math.abs(current.noiseReduction - pendingValue) < 0.001
+          ? current
+          : {
+              ...current,
+              noiseReduction: pendingValue,
+            },
+      );
+    }, noiseReductionCommitDelayMs);
+  }
+
   function handleVoiceSettingChange(
     field: keyof MicrophoneProcessingSettings,
     value: string,
   ) {
-    const nextValue = Number(value);
+    if (field === "microphoneChannelMode") {
+      if (!isMicrophoneChannelMode(value)) {
+        return;
+      }
 
-    if (!Number.isFinite(nextValue)) {
+      setVoiceSettings((current) => ({
+        ...current,
+        microphoneChannelMode: value,
+      }));
+      return;
+    }
+
+    const nextValue = parseVoiceRangeValue(value);
+
+    if (nextValue === null) {
+      return;
+    }
+
+    if (field === "noiseReduction") {
+      scheduleNoiseReductionCommit(nextValue);
       return;
     }
 
     setVoiceSettings((current) => ({
       ...current,
-      [field]: Math.min(1, Math.max(0, nextValue / 100)),
+      [field]: nextValue,
     }));
   }
 
+  function handleVoiceSettingCommit(
+    field: keyof MicrophoneProcessingSettings,
+    value: string,
+  ) {
+    if (field !== "noiseReduction") {
+      handleVoiceSettingChange(field, value);
+      return;
+    }
+
+    const nextValue = parseVoiceRangeValue(value);
+
+    if (nextValue === null) {
+      return;
+    }
+
+    commitNoiseReduction(nextValue);
+  }
+
   async function handleMicrophoneDeviceChange(deviceId: string) {
+    const shouldRestartMicrophoneTest = isTestingMicrophone;
+
     selectedMicrophoneDeviceIdRef.current = deviceId;
     setSelectedMicrophoneDeviceId(deviceId);
     saveMicrophoneDeviceId(deviceId);
@@ -4356,12 +5164,21 @@ export function CallRoom({ roomId }: { roomId: string }) {
       return;
     }
 
+    if (shouldRestartMicrophoneTest) {
+      stopSelfMonitorPlayback();
+      setIsTestingMicrophone(false);
+    }
+
     setIsReplacingMicrophone(true);
 
     try {
       await replaceLocalMicrophoneStream();
     } finally {
       setIsReplacingMicrophone(false);
+    }
+
+    if (shouldRestartMicrophoneTest) {
+      await restartMicrophoneTest();
     }
   }
 
@@ -4416,10 +5233,38 @@ export function CallRoom({ roomId }: { roomId: string }) {
       remoteParticipantsRef.current[participantId]?.audioStream ?? null,
       clampedVolume * masterOutputVolumeRef.current,
       isDeafenedRef.current,
+      selectedAudioOutputDeviceIdRef.current,
     );
   }
 
-  function stopMicrophoneTest({ restoreState = true } = {}) {
+  function handleScreenShareAudioVolumeChange(value: string) {
+    const nextVolume = Number(value);
+
+    if (!Number.isFinite(nextVolume)) {
+      return;
+    }
+
+    const clampedVolume = Math.min(1, Math.max(0, nextVolume / 100));
+    setScreenShareAudioVolume(clampedVolume);
+    screenShareAudioVolumeRef.current = clampedVolume;
+    saveVolume(screenShareAudioVolumeStorageKey, clampedVolume);
+    playRemoteAudio();
+  }
+
+  function handleAudioOutputDeviceChange(deviceId: string) {
+    selectedAudioOutputDeviceIdRef.current = deviceId;
+    setSelectedAudioOutputDeviceId(deviceId);
+    saveAudioOutputDeviceId(deviceId);
+    applyAudioOutputDevice(selfMonitorAudioRef.current, deviceId);
+
+    if (isTestingMicrophone) {
+      void restartMicrophoneTest();
+    }
+
+    playRemoteAudio();
+  }
+
+  function stopSelfMonitorPlayback() {
     for (const track of selfMonitorStreamRef.current?.getTracks() ?? []) {
       track.stop();
     }
@@ -4430,6 +5275,36 @@ export function CallRoom({ roomId }: { roomId: string }) {
       selfMonitorAudioRef.current.pause();
       selfMonitorAudioRef.current.srcObject = null;
     }
+  }
+
+  async function playSelfMonitorStream(monitorStream: MediaStream) {
+    const audio = selfMonitorAudioRef.current;
+
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+    audio.srcObject = null;
+    audio.muted = false;
+    audio.volume = 1;
+
+    const outputAudio = audio as HTMLAudioElementWithSinkId;
+    const outputDeviceId = selectedAudioOutputDeviceIdRef.current;
+
+    if (
+      typeof outputAudio.setSinkId === "function" &&
+      outputAudio.sinkId !== outputDeviceId
+    ) {
+      await outputAudio.setSinkId(outputDeviceId).catch(() => undefined);
+    }
+
+    audio.srcObject = monitorStream;
+    await audio.play().catch(() => undefined);
+  }
+
+  function stopMicrophoneTest({ restoreState = true } = {}) {
+    stopSelfMonitorPlayback();
 
     setIsTestingMicrophone(false);
 
@@ -4447,10 +5322,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
   stopMicrophoneTestRef.current = stopMicrophoneTest;
 
-  async function startMicrophoneTest() {
-    if (isTestingMicrophone) {
+  async function startMicrophoneTest({ restart = false } = {}) {
+    if (isTestingMicrophone && !restart) {
       stopMicrophoneTest();
       return;
+    }
+
+    if (restart) {
+      stopSelfMonitorPlayback();
     }
 
     let stream = localStreamRef.current;
@@ -4473,6 +5352,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
         return;
       } finally {
+        setMediaPreparationStep("idle");
         setIsPreparingMedia(false);
       }
     }
@@ -4488,11 +5368,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
     monitorTrack.enabled = true;
     const monitorStream = new MediaStream([monitorTrack]);
     selfMonitorStreamRef.current = monitorStream;
-    micTestRestoreRef.current = {
-      deafenRestoreMuted: deafenRestoreMutedRef.current,
-      isDeafened: isDeafenedRef.current,
-      isMuted: isMutedRef.current,
-    };
+
+    if (!micTestRestoreRef.current) {
+      micTestRestoreRef.current = {
+        deafenRestoreMuted: deafenRestoreMutedRef.current,
+        isDeafened: isDeafenedRef.current,
+        isMuted: isMutedRef.current,
+      };
+    }
+
     deafenRestoreMutedRef.current = isMutedRef.current;
     isDeafenedRef.current = true;
     setIsDeafened(true);
@@ -4500,14 +5384,13 @@ export function CallRoom({ roomId }: { roomId: string }) {
     setShowVolumeMixer(false);
     setIsTestingMicrophone(true);
 
-    if (selfMonitorAudioRef.current) {
-      selfMonitorAudioRef.current.srcObject = monitorStream;
-      selfMonitorAudioRef.current.muted = false;
-      selfMonitorAudioRef.current.volume = 1;
-      void selfMonitorAudioRef.current.play().catch(() => undefined);
-    }
+    await playSelfMonitorStream(monitorStream);
 
     window.requestAnimationFrame(playRemoteAudio);
+  }
+
+  async function restartMicrophoneTest() {
+    await startMicrophoneTest({ restart: true });
   }
 
   function closeVoiceSettings() {
@@ -5318,6 +6201,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
           onChange: handleMasterOutputVolumeChange,
           value: Math.round(masterOutputVolume * 100),
         },
+        {
+          ariaLabel: t(language, "mixerScreenShareAudioVolume"),
+          id: "screen-share-audio",
+          kind: "screen",
+          label: t(language, "mixerScreenShareAudio"),
+          onChange: handleScreenShareAudioVolumeChange,
+          value: Math.round(screenShareAudioVolume * 100),
+        },
         ...remoteList.map((participant) => ({
           ariaLabel: `${participant.displayName} ${t(language, "volume")}`,
           id: participant.participantId,
@@ -5599,7 +6490,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         <span className="call-control-label">{t(language, "leaveControl")}</span>
       </button>
       </section>
-      {volumeMixer}
+      {fullscreenSurface ? null : volumeMixer}
     </div>
   ) : null;
 
@@ -5656,6 +6547,24 @@ export function CallRoom({ roomId }: { roomId: string }) {
               (remoteVolumes[participant.participantId] ?? 1) *
                 masterOutputVolume,
               isDeafened,
+              selectedAudioOutputDeviceId,
+            )
+          }
+          autoPlay
+          playsInline
+        />
+      ))}
+      {remoteList.map((participant) => (
+        <audio
+          key={`${participant.participantId}-screen-audio`}
+          data-screen-audio-participant-id={participant.participantId}
+          ref={(element) =>
+            attachStreamToAudio(
+              element,
+              participant.screenAudioStream,
+              screenShareAudioVolume * masterOutputVolume,
+              isDeafened,
+              selectedAudioOutputDeviceId,
             )
           }
           autoPlay
@@ -5781,121 +6690,279 @@ export function CallRoom({ roomId }: { roomId: string }) {
 
           {callState === "idle" ? (
             <>
-              <section className="garden-panel p-4 sm:p-5">
-                <div className="flex items-start gap-3">
-                  <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-                    <Mic className="h-5 w-5" aria-hidden="true" />
-                  </div>
-                  <div className="min-w-0">
-                    <h2 className="garden-text-ink text-lg font-black">
-                      {t(language, "permissionsTitle")}
-                    </h2>
-                    <p className="garden-muted mt-1 text-sm font-bold leading-snug">
-                      {isMediaReady
-                        ? t(language, "permissionsReady")
-                        : t(language, "permissionsHelp")}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handlePrepareMedia}
-                  disabled={isPreparingMedia}
-                  className={`garden-button setup-state-button mt-4 h-14 w-full gap-2 px-5 text-base ${
-                    isMediaReady ? "is-on" : "is-off"
-                  }`}
-                >
-                  <Mic className="h-5 w-5" aria-hidden="true" />
-                  <span>
-                    {isPreparingMedia
-                      ? t(language, "preparingPermissions")
-                      : isMediaReady
-                        ? t(language, "permissionsReady")
-                        : t(language, "allowPermissions")}
-                  </span>
-                </button>
-
-                {isMediaReady ? (
-                  <div className="setup-preview mt-4">
-                    <div
-                      className={`setup-preview-video ${
-                        isCameraEnabled ? "has-video" : ""
-                      }`}
-                    >
-                      {isCameraEnabled ? (
-                        <video
-                          ref={(element) => {
-                            localVideoRef.current = element;
-                            attachLocalPreview();
-                          }}
-                          autoPlay
-                          muted
-                          playsInline
-                          className="setup-preview-stream"
-                        />
-                      ) : (
-                        <div className="setup-preview-placeholder">
-                          <CameraOff className="h-6 w-6" aria-hidden="true" />
-                          <span>{t(language, "cameraOff")}</span>
-                        </div>
-                      )}
+              {!isMediaReady ? (
+                <section className="garden-panel setup-permission-panel p-4 sm:p-5">
+                  <div className="flex items-start gap-3">
+                    <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
+                      <Mic className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="garden-text-ink text-lg font-black">
+                        {t(language, "permissionsTitle")}
+                      </h2>
+                      <p className="garden-muted mt-1 text-sm font-bold leading-snug">
+                        {t(language, "permissionsHelp")}
+                      </p>
                     </div>
                   </div>
-                ) : null}
-
-                <div className="setup-start-options mt-4 grid gap-3">
-                  <p className="garden-text-muted text-sm font-black">
-                    {t(language, "mediaStartOptions")}
-                  </p>
-                  <div className="setup-start-grid grid grid-cols-1 gap-3">
-                    <button
-                      type="button"
-                      onClick={handleToggleMute}
-                      disabled={isPreparingMedia}
-                      className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
-                        isMuted ? "is-off" : "is-on"
-                      }`}
-                    >
-                      {isMuted ? (
-                        <MicOff className="h-5 w-5" aria-hidden="true" />
-                      ) : (
-                        <Mic className="h-5 w-5" aria-hidden="true" />
-                      )}
-                      {isMuted
-                        ? t(language, "startMuted")
-                        : t(language, "startUnmuted")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleToggleCamera}
-                      disabled={isPreparingMedia}
-                      className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
-                        isSetupCameraOn ? "is-on" : "is-off"
-                      }`}
-                    >
-                      {isSetupCameraOn ? (
-                        <Camera className="h-5 w-5" aria-hidden="true" />
-                      ) : (
-                        <CameraOff className="h-5 w-5" aria-hidden="true" />
-                      )}
-                      {isSetupCameraOn
-                        ? t(language, "startCameraOn")
-                        : t(language, "startCameraOff")}
-                    </button>
-                  </div>
-                </div>
-
-                {isMediaReady ? (
                   <button
                     type="button"
-                    disabled={!roomInfo || !hasLiveAudioTrack(localStreamRef.current)}
-                    onClick={() => void handleJoinCall()}
-                    className="garden-button garden-button-primary setup-join-button mt-4 h-16 w-full px-5 text-xl"
+                    onClick={handlePrepareMedia}
+                    disabled={isPreparingMedia}
+                    className="garden-button setup-permission-button setup-state-button is-off mt-4 h-14 w-full gap-2 px-5 text-base"
                   >
-                    {t(language, "joinCall")}
+                    <Mic className="h-5 w-5" aria-hidden="true" />
+                    <span>
+                      {isPreparingMedia
+                        ? t(
+                            language,
+                            mediaPreparationStatusKeys[mediaPreparationStep],
+                          )
+                        : t(language, "allowPermissions")}
+                    </span>
                   </button>
-                ) : null}
-              </section>
+                </section>
+              ) : (
+                <section className="garden-panel setup-ready-stage p-4 sm:p-5">
+                  <div className="setup-ready-grid">
+                    <div className="setup-preview-column">
+                      <div className="setup-ready-banner">
+                        <Mic className="h-5 w-5" aria-hidden="true" />
+                        <span>{t(language, "permissionsReady")}</span>
+                      </div>
+                      <div className="setup-preview">
+                        <div
+                          className={`setup-preview-video ${
+                            isCameraEnabled ? "has-video" : ""
+                          }`}
+                        >
+                          {isCameraEnabled ? (
+                            <video
+                              ref={(element) => {
+                                localVideoRef.current = element;
+                                attachLocalPreview();
+                              }}
+                              autoPlay
+                              muted
+                              playsInline
+                              className="setup-preview-stream"
+                            />
+                          ) : (
+                            <div className="setup-preview-placeholder">
+                              <CameraOff className="h-6 w-6" aria-hidden="true" />
+                              <span>{t(language, "cameraOff")}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="setup-preview-audio-test">
+                          <div className="setup-preview-audio-copy min-w-0">
+                            <strong>{t(language, "micTestTitle")}</strong>
+                            <small>{t(language, "previewMicTestHelp")}</small>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void startMicrophoneTest()}
+                            disabled={isPreparingMedia || isReplacingMicrophone}
+                            className={`garden-button ${
+                              isTestingMicrophone
+                                ? "garden-button-secondary"
+                                : "garden-button-primary"
+                            } setup-preview-test-button`}
+                          >
+                            {isTestingMicrophone ? (
+                              <MicOff className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Mic className="h-4 w-4" aria-hidden="true" />
+                            )}
+                            <span>
+                              {isTestingMicrophone
+                                ? t(language, "stopMicTest")
+                                : t(language, "startMicTest")}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="setup-control-column">
+                      <div className="setup-device-panel">
+                        <div className="setup-device-heading">
+                          <strong>{t(language, "setupDevicesTitle")}</strong>
+                          <small>{t(language, "setupDevicesHelp")}</small>
+                        </div>
+                        <div className="setup-device-grid">
+                          <label className="setup-device-field">
+                            <span>{t(language, "microphoneDevice")}</span>
+                            <select
+                              value={selectedMicrophoneDeviceId}
+                              onChange={(event) => {
+                                void handleMicrophoneDeviceChange(
+                                  event.target.value,
+                                );
+                              }}
+                              disabled={isPreparingMedia || isReplacingMicrophone}
+                              className="garden-select"
+                            >
+                              <option value="">
+                                {t(language, "defaultMicrophoneDevice")}
+                              </option>
+                              {selectedMicrophoneDeviceId &&
+                              !microphoneDevices.some(
+                                (device) =>
+                                  device.deviceId === selectedMicrophoneDeviceId,
+                              ) ? (
+                                <option value={selectedMicrophoneDeviceId}>
+                                  {t(language, "selectedMicrophoneDevice")}
+                                </option>
+                              ) : null}
+                              {microphoneDevices.map((device, index) => (
+                                <option
+                                  key={device.deviceId || index}
+                                  value={device.deviceId}
+                                >
+                                  {device.label ||
+                                    `${t(language, "microphoneDevice")} ${index + 1}`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="setup-device-field">
+                            <span>{t(language, "audioOutputDevice")}</span>
+                            <select
+                              value={selectedAudioOutputDeviceId}
+                              onChange={(event) =>
+                                handleAudioOutputDeviceChange(event.target.value)
+                              }
+                              disabled={
+                                isPreparingMedia ||
+                                !isAudioOutputSelectionSupported
+                              }
+                              className="garden-select"
+                            >
+                              <option value="">
+                                {t(language, "defaultAudioOutputDevice")}
+                              </option>
+                              {selectedAudioOutputDeviceId &&
+                              !audioOutputDevices.some(
+                                (device) =>
+                                  device.deviceId === selectedAudioOutputDeviceId,
+                              ) ? (
+                                <option value={selectedAudioOutputDeviceId}>
+                                  {t(language, "selectedAudioOutputDevice")}
+                                </option>
+                              ) : null}
+                              {audioOutputDevices.map((device, index) => (
+                                <option
+                                  key={device.deviceId || index}
+                                  value={device.deviceId}
+                                >
+                                  {device.label ||
+                                    `${t(language, "audioOutputDevice")} ${index + 1}`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="setup-device-field">
+                            <span>{t(language, "microphoneChannelMode")}</span>
+                            <select
+                              value={voiceSettings.microphoneChannelMode}
+                              onChange={(event) =>
+                                handleVoiceSettingChange(
+                                  "microphoneChannelMode",
+                                  event.target.value,
+                                )
+                              }
+                              disabled={isPreparingMedia}
+                              className="garden-select"
+                            >
+                              {microphoneChannelModes.map((mode) => (
+                                <option key={mode} value={mode}>
+                                  {microphoneChannelModeLabel(language, mode)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        {!isAudioOutputSelectionSupported ? (
+                          <p className="setup-device-note">
+                            {t(language, "audioOutputDeviceUnsupported")}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={openVoiceSettings}
+                          disabled={isPreparingMedia}
+                          className="garden-button garden-button-quiet setup-voice-settings-button"
+                        >
+                          <SlidersHorizontal
+                            className="h-4 w-4"
+                            aria-hidden="true"
+                          />
+                          <span>{t(language, "voiceSettingsButton")}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="setup-action-column">
+                      <div className="setup-start-options grid gap-3">
+                        <p className="garden-text-muted text-sm font-black">
+                          {t(language, "mediaStartOptions")}
+                        </p>
+                        <div className="setup-start-grid grid grid-cols-1 gap-3">
+                          <button
+                            type="button"
+                            onClick={handleToggleMute}
+                            disabled={isPreparingMedia}
+                            className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
+                              isMuted ? "is-off" : "is-on"
+                            }`}
+                          >
+                            {isMuted ? (
+                              <MicOff className="h-5 w-5" aria-hidden="true" />
+                            ) : (
+                              <Mic className="h-5 w-5" aria-hidden="true" />
+                            )}
+                            {isMuted
+                              ? t(language, "startMuted")
+                              : t(language, "startUnmuted")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleToggleCamera}
+                            disabled={isPreparingMedia}
+                            className={`garden-button setup-state-button h-14 gap-2 px-3 text-sm sm:text-base ${
+                              isSetupCameraOn ? "is-on" : "is-off"
+                            }`}
+                          >
+                            {isSetupCameraOn ? (
+                              <Camera className="h-5 w-5" aria-hidden="true" />
+                            ) : (
+                              <CameraOff
+                                className="h-5 w-5"
+                                aria-hidden="true"
+                              />
+                            )}
+                            {isSetupCameraOn
+                              ? t(language, "startCameraOn")
+                              : t(language, "startCameraOff")}
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={
+                          !roomInfo || !hasLiveAudioTrack(localStreamRef.current)
+                        }
+                        onClick={() => void handleJoinCall()}
+                        className="garden-button garden-button-primary setup-join-button h-16 w-full px-5 text-xl"
+                      >
+                        {t(language, "joinCall")}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
 
               {error || cameraError ? (
                 <div className="grid gap-2">
@@ -6104,6 +7171,27 @@ export function CallRoom({ roomId }: { roomId: string }) {
                 <span>{t(language, "conversationControl")}</span>
               </button>
             </div>
+            <div className="media-fullscreen-volume-wrap">
+              <button
+                ref={fullscreenVolumeButtonRef}
+                type="button"
+                aria-controls="participant-volume-mixer"
+                aria-expanded={showVolumeMixer}
+                aria-haspopup="dialog"
+                aria-label={t(language, "participantAudio")}
+                onClick={() => {
+                  setShowConversationModeMenu(false);
+                  setShowVolumeMixer((current) => !current);
+                }}
+                className={`media-fullscreen-control media-fullscreen-mixer-button ${
+                  showVolumeMixer ? "is-selected" : ""
+                }`}
+              >
+                <Volume2 className="h-4 w-4" aria-hidden="true" />
+                <span>{t(language, "audioMixerControl")}</span>
+              </button>
+              {volumeMixer}
+            </div>
             {isFullscreenToolbarOpen ? (
               <div className="media-fullscreen-toolbar-panel">
                 <button
@@ -6164,12 +7252,14 @@ export function CallRoom({ roomId }: { roomId: string }) {
       ) : null}
 
       <CallRoomModals
+        audioOutputDevices={audioOutputDevices}
         callState={callState}
         canManageTurnRelay={canManageTurnRelay}
         connectionPathRows={connectionPathRows}
         connectionPathSummary={connectionPathSummary}
         hostRoomCode={hostRoomCode}
         isApplyingScreenQuality={isApplyingScreenQuality}
+        isAudioOutputSelectionSupported={isAudioOutputSelectionSupported}
         isCodeCopied={isCodeCopied}
         isPreparingMedia={isPreparingMedia}
         isReplacingMicrophone={isReplacingMicrophone}
@@ -6180,7 +7270,9 @@ export function CallRoom({ roomId }: { roomId: string }) {
         masterOutputVolume={masterOutputVolume}
         mediaLayoutMode={mediaLayoutMode}
         microphoneDevices={microphoneDevices}
+        microphoneLevel={microphoneLevel}
         onApplyScreenShareQuality={() => void handleApplyScreenShareQuality()}
+        onAudioOutputDeviceChange={handleAudioOutputDeviceChange}
         onCloseLayoutPicker={() => setShowLayoutPicker(false)}
         onCloseLeaveConfirmation={() => setShowLeaveConfirmation(false)}
         onCloseScreenShareSettings={closeScreenShareSettings}
@@ -6198,6 +7290,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         }}
         onOpenVoiceSettings={openVoiceSettings}
         onRemoteVolumeChange={handleRemoteVolumeChange}
+        onScreenShareAudioVolumeChange={handleScreenShareAudioVolumeChange}
         onScreenShareNumberChange={handleScreenShareNumberChange}
         onScreenShareResolutionChange={handleScreenShareResolutionChange}
         onSelectScreenSharePreset={handleSelectScreenSharePreset}
@@ -6206,12 +7299,15 @@ export function CallRoom({ roomId }: { roomId: string }) {
         onStartScreenShareFromSettings={() => void handleStartScreenShareFromSettings()}
         onThemeChange={handleThemeChange}
         onUpdateScreenShareQuality={updateScreenShareQuality}
+        onVoiceSettingCommit={handleVoiceSettingCommit}
         onVoiceSettingChange={handleVoiceSettingChange}
         orderedSurfaces={orderedSurfaces}
         remoteParticipants={remoteList}
         remoteVolumes={remoteVolumes}
         screenShareQuality={screenShareQuality}
         screenShareStats={screenShareStats}
+        screenShareAudioVolume={screenShareAudioVolume}
+        selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
         selectedMicrophoneDeviceId={selectedMicrophoneDeviceId}
         selectedScreenResolution={selectedScreenResolution}
         showLayoutPicker={showLayoutPicker}
@@ -6225,7 +7321,7 @@ export function CallRoom({ roomId }: { roomId: string }) {
         theme={theme}
         turnRelayReady={turnRelayReady}
         turnStatus={turnStatus}
-        voiceSettings={voiceSettings}
+        voiceSettings={displayedVoiceSettings}
       />
 
     </main>
