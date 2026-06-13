@@ -34,3 +34,15 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# Local agent/tool metadata
+AGENTS.md
+**/AGENTS.md
+SKILL.md
+**/SKILL.md
+skills/
+.codex/
+.agents/
+.claude/
+.cursor/
+.understand-anything/
