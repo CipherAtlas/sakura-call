@@ -5,141 +5,226 @@
 <h1 align="center">Sakura Call</h1>
 
 <p align="center">
-  A private, on-demand, owner-operated WebRTC calling app with multilingual captions.
+  A private, owner-operated WebRTC calling app for short on-demand calls.
 </p>
 
 <p align="center">
-  Audio, video, one-at-a-time screen sharing, and host-controlled live translated captions for invited participants.
+  Audio, video, screen sharing, and host-controlled multilingual live captions for invited participants.
 </p>
 
 ## Overview
 
-Sakura Call is a self-hosted communication tool for one owner and invited participants. It is built for short private calls: start the app when needed, use the room, then stop the app and tunnel immediately afterward.
+Sakura Call is a self-hosted communication tool for one owner and invited participants. It is designed for temporary private calls: start the app when needed, share the 4-digit room code, use the call, then stop the app and Cloudflare Tunnel immediately afterward.
 
-The product surface is intentionally small:
+This is intentionally not a public meeting platform. There are no user accounts, public room listings, queues, invite-link discovery flows, or always-on service assumptions.
 
-- Fixed room capacity of up to 6 people.
-- Owner-controlled room creation.
-- 4-digit room code join flow.
+Current product scope:
+
+- One active room at a time.
+- Up to 6 participants per room.
+- Owner-only room creation behind a private host passcode.
+- Guest join flow through language, display name, and a 4-digit room code.
 - Audio calls, video calls, and one-at-a-time screen sharing.
-- Conversation and captions panel visible throughout the meeting UI.
-- Host-controlled live captions with transcription and translation.
-- Peer-to-peer WebRTC media first, with managed TURN fallback when needed.
-- No invite links, public room directory, user accounts, queues, public meeting features, or always-on service assumptions.
+- Conversation and captions UI available during audio, video, and screen-sharing states.
+- Host-controlled live captions with transcription and per-recipient translation.
+- Peer-to-peer-first WebRTC media with managed Cloudflare Realtime TURN fallback when configured.
+- In-memory room state with no database or persistent call history.
 
-## Current Runtime Model
+## Runtime Model
 
-The intended runtime is on-demand:
+The intended public runtime is `./run.sh`:
 
-1. Start `./run.sh`.
-2. The script builds the app.
-3. The app runs locally on port `3010`.
-4. Cloudflare Tunnel exposes the HTTP app at `CLOUDFLARE_HOSTNAME`.
-5. Participants join with the 4-digit room code.
-6. On `Ctrl+C`, terminal hangup, or process exit, the app and Cloudflare Tunnel stop.
+1. Install dependencies if `node_modules/` is missing.
+2. Clear local app ports `3010`, `3011`, `3012`, and `3013`.
+3. Build the production Next.js app.
+4. Start the custom Next.js and Socket.IO server on `http://localhost:3010`.
+5. Start Cloudflare Tunnel for `CLOUDFLARE_HOSTNAME`.
+6. Stop both the app server and tunnel on `Ctrl+C`, terminal hangup, or process exit.
 
-Cloudflare Tunnel exposes the web app only. Browser media is negotiated separately through WebRTC ICE. Calls try direct peer-to-peer paths first. If direct ICE cannot work, configured Cloudflare Realtime TURN credentials are available as the managed relay fallback.
+Cloudflare Tunnel exposes the HTTP app only. Browser media is negotiated separately through WebRTC ICE. Calls try direct peer-to-peer paths first, then request managed TURN credentials from the Sakura Call server if direct ICE fails or if relay-only testing is enabled.
 
-There is no OCI layer, no self-hosted coturn service, no TURN Docker Compose stack, and no host-side "start relay" step.
+There is no self-hosted TURN VM, coturn service, Docker Compose relay stack, OCI deployment layer, or long-running production host in the current codebase.
+
+## Current Call Flow
+
+The normal guest flow is:
+
+1. Choose the language you will speak.
+2. Enter a display name.
+3. Enter the 4-digit room code.
+4. Allow camera and microphone permissions.
+5. Join the room.
+
+The owner flow is:
+
+1. Choose language and display name.
+2. Unlock host mode with `ROOM_OWNER_TOKEN`.
+3. Create a room.
+4. Share the 4-digit room code with invited participants.
+5. Start captions when needed.
+
+The room URL contains an internal room id, not the join code. Guests should join through the 4-digit room code flow.
+
+## Room And Session Behavior
+
+Room state lives in server memory:
+
+- A room expires after 4 hours.
+- Only one active room can exist at a time.
+- The host can create the active room and receives an HTTP-only creator cookie.
+- If the host leaves, the room ends for everyone.
+- Disconnected participants have a short reconnect window before their slot expires.
+- Reconnecting an existing participant requires the server-issued participant session token.
+- Failed room-code attempts are rate-limited and temporarily blocked after repeated failures.
+
+Browser storage is limited to client convenience and reconnect state:
+
+- `localStorage` stores preferences such as language, display name, theme, voice settings, selected device ids, volume levels, and layout choices.
+- `sessionStorage` stores the room code and participant session token for the current room session.
+- HTTP-only cookies store owner and room-creator privileges.
+- Room codes are not placed in URLs.
+
+## Meeting Features
+
+The meeting UI supports:
+
+- Mute and unmute.
+- Deafen and undeafen.
+- Camera on and off.
+- Screen sharing with one active sharer at a time.
+- Fullscreen viewing for participant video or shared screen surfaces.
+- Gallery, focus, speaker, collage, and compact media layouts.
+- Surface pickers for choosing what appears in the dominant view.
+- A volume mixer for master output, screen-share audio, and remote participant volumes.
+- Conversation panel, draggable overlay, fullscreen conversation panel, and browser Picture-in-Picture captions where supported.
+- Settings panels for room code, theme, voice, connection path, managed relay status, and screen-share quality.
+
+Screen-sharing controls include presets for text clarity, balanced sharing, motion, 4K/ultra, and custom settings. Manual controls can set resolution cap, frame rate, bitrate, detail-vs-motion optimization, and whether screen sharing should be prioritized over camera video. The UI also reports actual screen-share stats when the browser exposes them.
+
+Screen-share audio is browser-limited. The most reliable case is sharing a Chrome tab with tab audio enabled. Safari, Firefox, window sharing, and entire-screen sharing may provide video only.
+
+## Captions And Translation
+
+Captions are host-controlled. When the host starts the subtitle service:
+
+- Each participant browser sends short chunks of its own local microphone audio to the Sakura Call server.
+- The server sends those chunks to OpenAI for transcription.
+- Transcribed text is translated into each recipient's selected spoken language when needed.
+- The speaker receives a local preview of what others see.
+- Other participants receive translated caption events through Socket.IO.
+- Caption and conversation logs are held in browser state during the call.
+
+Remote audio is not transcribed from another participant's browser. Each browser submits only its own microphone while the caption service is running.
+
+Captions and translations are not end-to-end encrypted because microphone chunks are processed by this server and OpenAI. Audio, video, and screen-share media use the separate encrypted WebRTC media path.
 
 ## Media And Relay Model
 
-Sakura Call creates a peer-to-peer WebRTC mesh between joined participants. Each browser starts with STUN from `NEXT_PUBLIC_STUN_URLS`. If direct ICE does not connect or fails, the browser requests authenticated ICE configuration from `/api/ice-servers`; the server adds short-lived Cloudflare Realtime TURN credentials when TURN is configured, and the browser restarts ICE with TURN available.
+Sakura Call uses a WebRTC mesh between joined participants. Each browser starts with STUN servers from `NEXT_PUBLIC_STUN_URLS`, defaulting to Google STUN when unset.
 
 Normal behavior:
 
 - `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all`.
-- Direct P2P is tried first with STUN-only negotiation.
-- TURN is added only after the direct path fails or times out, unless relay-only testing is enabled.
-- Long-lived Cloudflare TURN key material stays server-side.
+- Direct peer-to-peer ICE is attempted first.
+- TURN credentials are requested from `/api/ice-servers` only for authenticated room participants.
+- Cloudflare Realtime TURN credentials are generated server-side and returned as short-lived browser ICE credentials.
+- The long-lived Cloudflare TURN key id and API token never go to the browser.
 
 Testing behavior:
 
-- `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=relay` forces relay-only ICE and is useful for validating TURN fallback.
-- Set it back to `all` for real calls.
+- `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=relay` forces relay-only ICE.
+- Use relay-only mode to validate TURN fallback.
+- Set it back to `all` for normal calls.
 
-The meeting settings modal includes a live connection path panel. It polls WebRTC stats and shows whether each active peer connection is `Direct P2P`, `TURN fallback`, `Mixed`, or `Waiting`, with RTT when the browser reports it.
+The settings modal includes a connection path panel. It polls WebRTC stats and reports each active peer path as direct P2P, TURN fallback, mixed, or waiting, with RTT when the browser exposes it.
 
-## Microphone Processing Model
+## Microphone Processing
 
-Sakura Call normalizes microphone audio in the browser before sending it through WebRTC. This is especially important for USB audio interfaces, aggregate devices, and virtual devices that may expose a single mic as one side of a stereo or multi-channel input.
+The app processes microphone audio locally in the browser before sending it over WebRTC. Browser-provided noise suppression is intentionally disabled so the app can apply a consistent local Web Audio chain.
 
-The local microphone chain is:
+The microphone chain is:
 
 1. Capture the selected browser microphone.
-2. Route the selected mic channel mode into a mono voice path.
-3. Apply the local input gain control.
-4. Analyze input level for the live meter and gate state.
-5. Apply local RNNoise noise suppression when enabled.
-6. Keep a delayed dry voice bed while suppression is active so high suppression does not hollow out speech.
+2. Convert the selected input channel mode into a mono voice path.
+3. Apply local input gain.
+4. Analyze input level for meters and gate state.
+5. Apply RNNoise suppression when available.
+6. Blend in a delayed dry voice bed so high suppression stays natural.
 7. Apply a soft noise gate.
 8. Apply automatic voice leveling.
 9. Apply compression and limiting.
 10. Send the processed mono track to WebRTC.
 
-Browser-provided noise suppression is intentionally disabled. The app uses its own local Web Audio/RNNoise processing so behavior is more consistent across microphones and browsers. The RNNoise blend is intentionally capped and mixed with a delayed dry voice bed to avoid the hollow, tunnel-like sound that can happen when a voice is over-suppressed.
+Voice settings include:
 
-For most USB interfaces, use the interface directly as the Sakura Call microphone. OBS, BlackHole, or another virtual mixer should not be required just to convert a left-channel or multi-channel mic into a call-ready mono signal. A virtual mixer can still be useful if the browser cannot see the physical input channel at all, or if an external mixer chain sounds better for a specific device.
+- Microphone device selection.
+- Output device selection when the browser supports it.
+- Mic channel mode: auto, input 1/left, input 2/right, or mix all channels.
+- Noise suppression level.
+- Noise gate level with live input, noise floor, threshold, peak, and gate state.
+- Local processed microphone test.
+- Input volume and clipping protection.
 
-The voice settings modal includes a mic channel selector:
+For most USB audio interfaces, use the interface directly as the Sakura Call microphone. The channel selector handles common one-sided stereo and multi-channel interface captures without requiring OBS, BlackHole, or another virtual mixer.
 
-- `Auto` starts with input 1 and switches to input 2 only when input 2 is clearly the active voice channel.
-- `Input 1 / Left` is the first troubleshooting choice for USB interfaces where the direct browser capture sounds distorted.
-- `Input 2 / Right` is useful when the mic is physically plugged into interface input 2.
-- `Mix all channels` keeps a manual all-channel mix available for unusual devices, but it is not the safest default for USB interfaces.
+## Privacy Boundaries
 
-The same modal includes a live noise gate meter with input level, estimated noise floor, gate threshold, peak level, and gate open/closed state.
+Sakura Call is private and self-hosted, but not every feature has the same privacy boundary.
 
-## Privacy Model
+Audio, video, and screen sharing:
 
-Audio, video, and screen sharing use encrypted WebRTC media transport between participating browsers. In group calls, media is not mixed by the server. When TURN is used, Cloudflare forwards encrypted WebRTC packets, but the relay can still see connection metadata such as IP addresses, ports, timing, and traffic volume.
+- Use encrypted WebRTC media transport between participating browsers.
+- Are not mixed by the Sakura Call server.
+- May travel through Cloudflare TURN when relay fallback is needed.
+- Remain encrypted at the WebRTC media layer even when relayed, though relays can see metadata such as IP addresses, ports, timing, and traffic volume.
 
-Captions and translations use a different path. When the host starts captions, each joined browser sends short local microphone chunks to the Sakura Call server. The server sends those chunks to OpenAI for transcription and translation, then sends translated text to connected recipients and a preview back to the speaker.
+Captions and translations:
 
-Important boundaries:
+- Are explicitly host-controlled.
+- Send local microphone chunks to this server and OpenAI while enabled.
+- Send translated text back through the Sakura Call server.
+- Are not end-to-end encrypted.
 
-- Remote audio is not transcribed from another participant's browser.
-- Captions are host-controlled for this private on-demand room. Each browser sends only its own microphone chunks while the caption service is running.
-- Caption audio is processed by this server and OpenAI, so captions are not end-to-end encrypted.
-- Room state is stored in memory only and disappears when the server stops.
-- Room codes are not placed in URLs or localStorage.
-- The OpenAI API key and Cloudflare TURN API token stay server-side.
-- Populated `.env` files, build output, dependency folders, logs, and caches are ignored by Git.
+Server and storage:
+
+- Room state, participants, room codes, failed attempts, and caption-service state are in memory.
+- No account database, searchable room list, message database, or persistent call history exists.
+- Environment files, build output, dependency folders, logs, caches, agent metadata, and local skill files are ignored by Git.
 
 ## Tech Stack
 
-- Next.js 15 with a custom Node HTTP server
-- React 19
-- TypeScript
-- Tailwind CSS 4
-- Socket.IO for room signaling, captions, and call events
-- WebRTC for audio, video, and screen media
-- Web Audio API and RNNoise WASM for browser-side speech segmentation and microphone processing
-- OpenAI API for transcription and translation
-- Cloudflare Tunnel for temporary HTTPS access to the HTTP app
-- Cloudflare Realtime TURN for managed WebRTC relay fallback
+- Next.js 15 with a custom Node HTTP server.
+- React 19.
+- TypeScript.
+- Tailwind CSS 4.
+- Socket.IO for room signaling, captions, and call events.
+- WebRTC for audio, video, and screen media.
+- Web Audio API and RNNoise WASM for browser-side microphone processing.
+- OpenAI API for transcription and translation.
+- Cloudflare Tunnel for temporary HTTPS access to the HTTP app.
+- Cloudflare Realtime TURN for managed WebRTC relay fallback.
 
 ## Requirements
 
 Required for local development:
 
-- Node.js 20 or newer
-- npm
+- Node.js 20 or newer.
+- npm.
 
 Required for captions:
 
-- An OpenAI API key
+- An OpenAI API key.
 
 Required for public real-device calls:
 
-- `cloudflared`
-- A Cloudflare account
-- A Cloudflare-managed domain and hostname for the tunnel
+- `cloudflared`.
+- A Cloudflare account.
+- A Cloudflare-managed domain and hostname for the tunnel.
 
 Required for managed TURN fallback:
 
-- A Cloudflare Realtime TURN key ID
-- A Cloudflare Realtime TURN API token that can generate TURN credentials for that key
+- A Cloudflare Realtime TURN key id.
+- A Cloudflare Realtime TURN API token that can generate TURN credentials for that key.
 
 ## Quick Start
 
@@ -167,7 +252,23 @@ ROOM_OWNER_TOKEN=<private-owner-passcode>
 ROOM_OWNER_SESSION_SECRET=<long-random-cookie-secret>
 ```
 
-For real calls with managed TURN fallback, also add:
+Start the local development server:
+
+```bash
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+Localhost is enough for basic browser microphone and UI testing. iPhone Safari and remote participants need HTTPS, so use the Cloudflare Tunnel flow for actual calls.
+
+## On-Demand Public Run
+
+For real calls with managed TURN fallback, add:
 
 ```bash
 CLOUDFLARE_TURN_TOKEN_ID=<cloudflare-turn-token-id>
@@ -186,62 +287,19 @@ CLOUDFLARE_TUNNEL_NAME=sakura-call
 CLOUDFLARE_SERVICE_URL=http://localhost:3010
 ```
 
-Start the local development server:
-
-```bash
-npm run dev
-```
-
-Open:
-
-```text
-http://localhost:3000
-```
-
-Localhost is enough for basic browser microphone and UI testing. iPhone Safari and remote participants need HTTPS, so use the Cloudflare Tunnel flow for actual calls.
-
-## On-Demand Public Run
-
-Set up the Cloudflare Tunnel once after configuring the tunnel environment variables:
+Set up or update the named tunnel and DNS record:
 
 ```bash
 npm run tunnel:setup
 ```
 
-Then start the full on-demand stack:
+Then start the on-demand public stack:
 
 ```bash
 ./run.sh
 ```
 
-`run.sh` owns the runtime lifecycle:
-
-1. Clears the local app ports.
-2. Builds the production app.
-3. Starts the production app on `http://localhost:3010`.
-4. Starts Cloudflare Tunnel for the configured hostname.
-5. Stops the app and tunnel on exit.
-
-Run `npm run tunnel:setup` again if you change the Cloudflare hostname, tunnel name, zone, account, or tunnel API token.
-
-## Join Flow
-
-The normal call flow is:
-
-1. Choose a language.
-2. Enter a display name.
-3. Host unlocks host mode with `ROOM_OWNER_TOKEN`.
-4. Host creates a room.
-5. Host shares the 4-digit room code.
-6. Guest chooses a language.
-7. Guest enters a display name.
-8. Guest enters the 4-digit room code.
-9. Participants allow the needed media permissions.
-10. The room admits up to 6 participants.
-11. The host starts captions if needed.
-12. While captions are running, each joined browser sends its own microphone chunks for transcription and translation.
-
-Group calls use a peer-to-peer mesh, so each additional participant increases browser CPU and bandwidth usage.
+The public URL works only while this machine, the app server, and Cloudflare Tunnel are running.
 
 ## Environment Variables
 
@@ -252,28 +310,30 @@ Use `.env.local` for local secrets. `.env` also works locally, but populated env
 | `OPENAI_API_KEY` | Server-side OpenAI API key for transcription and translation. Required only when captions are used. |
 | `TRANSCRIPTION_MODEL` | Transcription model. Defaults to `gpt-4o-transcribe`. |
 | `TRANSLATION_MODEL` | Translation model. Defaults to `gpt-4o-mini`. |
-| `NEXT_PUBLIC_STUN_URLS` | Comma-separated STUN URLs. Defaults to Google STUN when unset. |
-| `NEXT_PUBLIC_ICE_TRANSPORT_POLICY` | `all` for normal P2P-first behavior, `relay` for TURN-only testing. |
-| `CLOUDFLARE_TURN_TOKEN_ID` | Cloudflare Realtime TURN token/key ID used by the server to generate short-lived ICE credentials. |
+| `NEXT_PUBLIC_STUN_URLS` | Comma-separated STUN URLs. Defaults to `stun:stun.l.google.com:19302`. |
+| `NEXT_PUBLIC_ICE_TRANSPORT_POLICY` | `all` for normal peer-to-peer-first calls, `relay` for TURN-only testing. |
+| `CLOUDFLARE_TURN_TOKEN_ID` | Cloudflare Realtime TURN token/key id used by the server to generate short-lived ICE credentials. |
 | `CLOUDFLARE_TURN_API_TOKEN` | Cloudflare Realtime TURN API token. Keep server-side only. |
 | `CLOUDFLARE_TURN_TTL_SECONDS` | Lifetime for generated TURN credentials. Defaults to `86400`. |
 | `ROOM_OWNER_TOKEN` | Private passcode used to unlock host mode and create rooms. |
 | `ROOM_OWNER_SESSION_SECRET` | Secret used to sign the host session cookie. Falls back to `ROOM_OWNER_TOKEN` when unset. |
 | `APP_ALLOWED_ORIGINS` | Optional comma-separated allowed origins for production hardening. |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare token used by `scripts/cloudflare-tunnel.mjs` for tunnel setup, tunnel lookup, tunnel token retrieval, and DNS setup. |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for the tunnel. |
-| `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID for the public hostname. |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id for the tunnel. |
+| `CLOUDFLARE_ZONE_ID` | Cloudflare zone id for the public hostname. |
 | `CLOUDFLARE_HOSTNAME` | Public hostname, for example `call.example.com`. |
 | `CLOUDFLARE_TUNNEL_NAME` | Named Cloudflare Tunnel. Defaults to `sakura-call`. |
 | `CLOUDFLARE_SERVICE_URL` | Local service URL for tunnel ingress, usually `http://localhost:3010`. |
 | `SHUTDOWN_NOTICE_GRACE_MS` | Optional delay before shutdown notification redirect. Defaults to `750`. |
+
+In production, state-changing HTTP routes and Socket.IO handshakes are origin-checked. Allowed origins come from localhost defaults, `CLOUDFLARE_HOSTNAME`, and `APP_ALLOWED_ORIGINS`.
 
 ## Cloudflare Tunnel Setup
 
 Use this when you want a real HTTPS URL for Safari, mobile devices, or a participant outside your local network.
 
 1. Add your domain to Cloudflare.
-2. Point your registrar nameservers to the Cloudflare nameservers.
+2. Point your registrar nameservers to Cloudflare.
 3. Create a Cloudflare API token for the target account and zone.
 4. Give that token enough access to manage Cloudflare Tunnel and the target DNS record.
 5. Add the Cloudflare tunnel values to `.env.local`.
@@ -297,18 +357,18 @@ Run the app and tunnel:
 ./run.sh
 ```
 
-The public URL only works while this machine, the app server, and Cloudflare Tunnel are running.
+Run `npm run tunnel:setup` again if you change the Cloudflare hostname, tunnel name, zone, account, or tunnel API token.
 
 ## Cloudflare Realtime TURN Setup
 
-Use this when you want a managed relay fallback for restrictive NATs, corporate networks, hotel Wi-Fi, or mobile networks.
+Use this for restrictive NATs, corporate networks, hotel Wi-Fi, or mobile networks where direct peer-to-peer ICE may fail.
 
 1. In Cloudflare, create a Realtime TURN key for this app.
-2. Store the TURN token/key ID in `CLOUDFLARE_TURN_TOKEN_ID`.
+2. Store the TURN token/key id in `CLOUDFLARE_TURN_TOKEN_ID`.
 3. Store the TURN API token in `CLOUDFLARE_TURN_API_TOKEN`.
-4. Keep `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all` for normal peer-to-peer-first calls.
+4. Keep `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all` for normal calls.
 
-Browsers never receive the long-lived Cloudflare TURN key ID or API token. Joined participants receive only short-lived generated `iceServers` from the Sakura Call server.
+Browsers never receive the long-lived Cloudflare TURN key id or API token. Joined participants receive only short-lived generated `iceServers` from the Sakura Call server.
 
 Cloudflare's generated ICE server list can include alternate port `53` URLs. Sakura Call filters those out because common browsers and networks often block that port. The normal Cloudflare TURN UDP, TCP, and TLS ports remain available.
 
@@ -316,37 +376,43 @@ Cloudflare's generated ICE server list can include alternate port `53` URLs. Sak
 
 ```bash
 npm run dev           # Start the custom Next.js + Socket.IO dev server on port 3000
+npm run dev:public    # Start the dev server on port 3010
 npm run build         # Build the Next.js app
 npm run start         # Start the production app on the default port
 npm run start:public  # Start the production app on port 3010
-npm run tunnel:setup  # Create or update Cloudflare Tunnel and DNS
-npm run tunnel:run    # Run the Cloudflare Tunnel helper
 npm run lint          # Run ESLint
 npm run typecheck     # Run TypeScript without emitting files
 npm test              # Run server tests
-./run.sh              # Start app and Cloudflare Tunnel, then clean up on exit
+npm run tunnel:setup  # Create or update Cloudflare Tunnel and DNS
+npm run tunnel:run    # Run the Cloudflare Tunnel helper
+./run.sh              # Build, start app, start tunnel, and clean up on exit
 ```
 
 ## Project Structure
 
 ```text
-app/                          Next.js pages, layout, robots route, and global CSS
-app/room/[roomId]/            Room page
+app/                          Next.js pages, layout, robots route, RNNoise worklet route, and global CSS
+app/room/[roomId]/            Room page wrapper for the call experience
 components/                   Client UI and call experience
-components/CallRoom.tsx       Meeting room, WebRTC state, controls, settings modals
-components/VideoGrid.tsx      Meeting media layout
-lib/audioCapture.ts           Browser speech segmentation and WAV encoding
-lib/audioEnhancement.ts       Browser microphone mono mix, RNNoise, gate, leveling, compression, and limiting
-lib/i18n.ts                   Supported language metadata and UI strings
-lib/roomCode.ts               Browser session storage helper for room codes
-lib/socket.ts                 Socket.IO client
+components/CallRoom.tsx       Meeting room, WebRTC state, controls, captions, fullscreen, and PiP behavior
+components/CallRoomModals.tsx Settings, voice, layout, leave, and screen-share quality modals
+components/SubtitlesPanel.tsx Conversation and translated caption panels
+components/VideoGrid.tsx      Participant and screen-share media layouts
+lib/audioCapture.ts           Browser speech segmentation and WAV encoding for captions
+lib/audioEnhancement.ts       Browser mic mono mix, RNNoise, gate, leveling, compression, and limiting
+lib/i18n.ts                   Supported languages and UI strings
+lib/roomCode.ts               Session storage helpers for room codes and participant session tokens
+lib/socket.ts                 Socket.IO client singleton
+lib/theme.ts                  Theme storage and system theme handling
 lib/transcription.ts          Server-side OpenAI transcription
 lib/translation.ts            Server-side OpenAI translation
 lib/webrtc.ts                 WebRTC peer connection helpers
-server/index.ts               Custom HTTP server, Next handler, and API routes
-server/rooms.ts               In-memory room, code, participant, and host state
-server/signaling.ts           Socket.IO signaling, subtitles, and room events
-server/turn.ts                Cloudflare Realtime TURN credential generation
+server/cookies.ts             Cookie parsing helpers
+server/index.ts               Custom HTTP server, Next handler, API routes, HTTPS redirect, and shutdown notices
+server/origin.ts              Allowed origin handling for HTTP mutations and Socket.IO
+server/rooms.ts               In-memory room, room code, participant, session, host, and screen-share state
+server/signaling.ts           Socket.IO signaling, captions, participant events, and room lifecycle events
+server/turn.ts                Cloudflare Realtime TURN credential generation and status
 scripts/cloudflare-tunnel.mjs Cloudflare Tunnel setup and run helper
 run.sh                        On-demand public runtime script
 ```
@@ -359,18 +425,19 @@ run.sh                        On-demand public runtime script
 - Use a long random `ROOM_OWNER_SESSION_SECRET`.
 - Keep `robots.txt` disallowing crawling because the app is private and on-demand.
 - Leave `NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all` except when testing TURN specifically.
-- If the Cloudflare hostname is reachable for longer than a short call, add Cloudflare WAF or rate-limit rules for `/api/owner`, `/api/rooms`, `/api/rooms/join`, `/api/ice-servers`, `/api/turn/status`, and `/socket.io/*`.
 - Captions and translations are not end-to-end encrypted because microphone chunks are processed by this server and OpenAI.
+- If the Cloudflare hostname stays reachable beyond a short call, add Cloudflare WAF or rate-limit rules for `/api/owner`, `/api/rooms`, `/api/rooms/join`, `/api/ice-servers`, `/api/turn/status`, and `/socket.io/*`.
 
 ## Limitations
 
 - This is not a scalable public calling service.
-- It supports rooms with up to 6 participants.
+- It supports one active room with up to 6 participants.
 - Room and participant state are in memory.
 - There is no database, account system, public room listing, queue, monitoring stack, CI/CD pipeline, or production deployment target.
 - TURN fallback requires configured Cloudflare Realtime TURN credentials.
 - Captions require an OpenAI API key and can take a few seconds depending on speech length and translation load.
-- Screen-share audio is browser-limited. In practice, share-audio support is expected only when sharing a Chrome tab with tab audio enabled; Safari, Firefox, window sharing, and entire-screen sharing may provide video only.
+- Picture-in-Picture captions depend on browser support.
+- Screen-share audio depends heavily on browser and capture-source support.
 - Group calls use a browser mesh, so CPU and bandwidth cost grow with participant count.
 
 ## Verification Checklist
@@ -385,13 +452,13 @@ Before a real call, confirm:
 - `./run.sh` starts the app and Cloudflare Tunnel.
 - The host can unlock host mode.
 - The host can create a room and copy the 4-digit code.
-- The guest can join with the language, name, and room code flow.
+- A guest can join with the language, name, and room code flow.
 - Participants beyond the 6-person room capacity are blocked.
 - Audio, video, and screen sharing controls work for the selected browsers.
-- Screen-share audio is tested from a Chrome tab with tab audio enabled, not from Safari, Firefox, window sharing, or entire-screen sharing.
-- Direct USB interface microphones produce centered mono voice audio with the correct mic channel selected.
-- Voice settings show live input level, noise floor, gate threshold, and gate open/closed state.
-- The settings modal shows the connection path panel during calls.
+- Screen-share audio is tested from a Chrome tab with tab audio enabled.
+- Direct USB interface microphones produce centered mono voice audio with the right mic channel mode selected.
+- Voice settings show live input level, noise floor, gate threshold, peak level, and gate open/closed state.
+- The settings modal shows managed relay and connection path status during calls.
 - The conversation and captions section remains visible during audio, video, and screen-sharing states.
 - Each viewer receives subtitles translated into their selected spoken language when captions are enabled.
 - The app and tunnel stop when `run.sh` exits.
