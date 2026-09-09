@@ -14,6 +14,8 @@ import {
   TowerControl,
   X
 } from "lucide-react";
+import { EntryProgress } from "@/components/EntryProgress";
+import { useDialogFocus } from "@/components/useDialogFocus";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -94,6 +96,8 @@ export default function HomePage() {
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [theme, setTheme] = useState<ThemeMode>(() => getSavedTheme());
   const hasOpenHomeModal = showSettings || Boolean(activeRoomConflict);
+
+  useDialogFocus(hasOpenHomeModal);
 
   useEffect(() => {
     setLanguage(getSavedLanguage());
@@ -518,6 +522,7 @@ export default function HomePage() {
                   : homeFootnote}
               </p>
 
+              <EntryProgress language={language} step={3} />
               {effectiveHomeMode === "choose" ? (
                 <div className="sakura-control-stack">
                   <button
@@ -550,6 +555,8 @@ export default function HomePage() {
                   </label>
                   <input
                     id="room-code"
+                    enterKeyHint="go"
+                    onKeyDown={(event) => { if (event.key === "Enter" && !isJoining && /^\d{4}$/.test(roomCode)) void handleJoinRoom(); }}
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     pattern="[0-9]*"
@@ -589,19 +596,8 @@ export default function HomePage() {
             </footer>
           </div>
 
-          <div className="sakura-visual" aria-hidden="true">
-            <span className="sakura-branch" />
-            <span className="sakura-bloom sakura-bloom-one" />
-            <span className="sakura-bloom sakura-bloom-two" />
-            <span className="sakura-bloom sakura-bloom-three" />
-            <span className="sakura-petal sakura-petal-one" />
-            <span className="sakura-petal sakura-petal-two" />
-            <span className="sakura-petal sakura-petal-three" />
-            <span className="sakura-petal sakura-petal-four" />
-            <span className="sakura-leaf sakura-leaf-one" />
-            <span className="sakura-leaf sakura-leaf-two" />
-          </div>
-        </div>
+          <div className="sakura-visual" aria-hidden="true" />
+</div>
       </section>
 
       {activeRoomConflict ? (
@@ -620,10 +616,7 @@ export default function HomePage() {
             <div className="settings-modal-ribbon" aria-hidden="true" />
             <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
               <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
-                  {t(language, "appName")}
-                </p>
+
                 <h2
                   className="garden-title mt-2 text-2xl"
                   id="active-room-modal-title"
@@ -671,8 +664,7 @@ export default function HomePage() {
                 </button>
                 <button
                   type="button"
-                  autoFocus
-                  disabled={!/^\d{4}$/.test(activeRoomConflict.roomCode) || isJoining}
+                                    disabled={!/^\d{4}$/.test(activeRoomConflict.roomCode) || isJoining}
                   onClick={() => void handleJoinActiveRoom()}
                   className="garden-button garden-button-primary h-12 px-5"
                 >
@@ -700,10 +692,7 @@ export default function HomePage() {
             <div className="settings-modal-ribbon" aria-hidden="true" />
             <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
               <div className="min-w-0">
-                <p className="garden-kicker flex items-center gap-2">
-                  <Flower2 className="garden-icon-blush h-4 w-4" aria-hidden="true" />
-                  {t(language, "appName")}
-                </p>
+
                 <h2
                   className="garden-title mt-2 text-2xl"
                   id="settings-modal-title"
@@ -727,6 +716,7 @@ export default function HomePage() {
                   {t(language, "changeLanguage")}
                 </p>
                 <select
+                  aria-label={t(language, "changeLanguage")}
                   value={language}
                   onChange={(event) => {
                     const nextLanguage = event.target.value;

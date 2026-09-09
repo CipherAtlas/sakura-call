@@ -32,10 +32,7 @@ export type EnhancedMicrophoneStream = {
 
 const analyserSampleCount = 1024;
 const maximumInputChannels = 8;
-const targetVoiceRms = 0.075;
 const activeVoiceFloorRms = 0.0035;
-const minimumAutoGain = 0.35;
-const maximumAutoGain = 7.5;
 const rnnoiseWorkletLoadTimeoutMs = 2200;
 const rnnoiseWorkletName = "NoiseSuppressorWorklet";
 const rnnoiseWorkletUrl = "/rnnoise-worklet/NoiseSuppressorWorklet.js";
@@ -49,14 +46,12 @@ const autoChannelSwitchFloorRms = 0.012;
 const autoChannelSwitchRatio = 2.2;
 const autoChannelReturnRatio = 1.55;
 const noiseReductionTransitionSeconds = 0.24;
-const noiseReductionLevelerSettleMs = 280;
-const noiseReductionLevelerGainCeiling = 1.8;
 const maximumNoiseSuppressorWetGain = 0.82;
 const minimumDenoisedDryBedGain = 0.14;
-const defaultProcessingSettings: MicrophoneProcessingSettings = {
+export const defaultMicrophoneProcessingSettings: MicrophoneProcessingSettings = {
   microphoneChannelMode: "auto",
   noiseGate: 0.02,
-  noiseReduction: 0.85,
+  noiseReduction: 0.35,
 };
 
 function clampUnit(value: number) {
@@ -92,16 +87,16 @@ function normalizeMicrophoneChannelMode(
 
 function normalizeProcessingSettings(
   settings: Partial<MicrophoneProcessingSettings> | undefined =
-    defaultProcessingSettings,
+    defaultMicrophoneProcessingSettings,
 ): MicrophoneProcessingSettings {
   return {
     microphoneChannelMode: normalizeMicrophoneChannelMode(
       settings?.microphoneChannelMode,
-      defaultProcessingSettings.microphoneChannelMode,
+      defaultMicrophoneProcessingSettings.microphoneChannelMode,
     ),
-    noiseGate: clampUnit(settings?.noiseGate ?? defaultProcessingSettings.noiseGate),
+    noiseGate: clampUnit(settings?.noiseGate ?? defaultMicrophoneProcessingSettings.noiseGate),
     noiseReduction: clampUnit(
-      settings?.noiseReduction ?? defaultProcessingSettings.noiseReduction,
+      settings?.noiseReduction ?? defaultMicrophoneProcessingSettings.noiseReduction,
     ),
   };
 }
@@ -163,7 +158,7 @@ function levelSnapshotForSettings(
 }
 
 export const idleMicrophoneLevelSnapshot = levelSnapshotForSettings(
-  defaultProcessingSettings,
+  defaultMicrophoneProcessingSettings,
 );
 
 function rmsFromByteTimeDomain(samples: Uint8Array) {
@@ -183,7 +178,7 @@ function rmsFromByteTimeDomain(samples: Uint8Array) {
 
 function createPassthrough(
   rawStream: MediaStream,
-  initialProcessingSettings = defaultProcessingSettings,
+  initialProcessingSettings = defaultMicrophoneProcessingSettings,
 ): EnhancedMicrophoneStream {
   let lastSnapshot = levelSnapshotForSettings(initialProcessingSettings);
 
@@ -279,7 +274,7 @@ function disconnectNode(node: AudioNode | null) {
 export async function createEnhancedMicrophoneStream(
   rawStream: MediaStream,
   initialGain = 1,
-  initialProcessingSettings = defaultProcessingSettings,
+  initialProcessingSettings = defaultMicrophoneProcessingSettings,
 ): Promise<EnhancedMicrophoneStream> {
   if (typeof window === "undefined") {
     return createPassthrough(rawStream, initialProcessingSettings);
@@ -297,7 +292,7 @@ export async function createEnhancedMicrophoneStream(
   let audioContext: AudioContext | null = null;
 
   try {
-    audioContext = new AudioContextConstructor();
+    audioContext = new AudioContextConstructor({ sampleRate: 48000 });
     const activeAudioContext = audioContext;
     const source = activeAudioContext.createMediaStreamSource(rawStream);
     const inputChannelCount = inputChannelCountFromStream(rawStream);
@@ -322,8 +317,6 @@ export async function createEnhancedMicrophoneStream(
     const rnnoiseGain = configureMonoNode(activeAudioContext.createGain());
     const suppressionMix = configureMonoNode(activeAudioContext.createGain());
     const gateGain = configureMonoNode(activeAudioContext.createGain());
-    const autoGain = configureMonoNode(activeAudioContext.createGain());
-    const compressor = activeAudioContext.createDynamicsCompressor();
     const limiter = activeAudioContext.createDynamicsCompressor();
     const outputGain = configureMonoNode(activeAudioContext.createGain());
     const analyser = activeAudioContext.createAnalyser();
@@ -336,16 +329,13 @@ export async function createEnhancedMicrophoneStream(
     let frameId = 0;
     let isStopped = false;
     let autoInputChannelIndex = 0;
-    let currentAutoGain = 1;
     let currentGateGain = 1;
     let gateIsOpen = processingSettings.noiseGate <= 0;
     let estimatedNoiseFloorRms = activeVoiceFloorRms;
     let peakLevel = 0;
     let lastLevelPublishAt = 0;
-    let levelerSettlingUntil = 0;
     let lastLevelSnapshot = levelSnapshotForSettings(processingSettings);
 
-    configureMonoNode(compressor);
     configureMonoNode(limiter);
 
     for (const channelGain of channelInputGains) {
@@ -364,16 +354,9 @@ export async function createEnhancedMicrophoneStream(
     alignedDryGain.gain.value = 0;
     rnnoiseGain.gain.value = 0;
     gateGain.gain.value = currentGateGain;
-    autoGain.gain.value = currentAutoGain;
     outputGain.gain.value = 0.9;
 
-    compressor.threshold.value = -24;
-    compressor.knee.value = 12;
-    compressor.ratio.value = 3;
-    compressor.attack.value = 0.006;
-    compressor.release.value = 0.18;
-
-    limiter.threshold.value = -3;
+    limiter.threshold.value = -1;
     limiter.knee.value = 0;
     limiter.ratio.value = 20;
     limiter.attack.value = 0.001;
@@ -404,8 +387,6 @@ export async function createEnhancedMicrophoneStream(
 
     suppressionMix
       .connect(gateGain)
-      .connect(autoGain)
-      .connect(compressor)
       .connect(limiter)
       .connect(outputGain)
       .connect(destination);
@@ -534,24 +515,6 @@ export async function createEnhancedMicrophoneStream(
         : 0;
       const immediateDryBedGain = isDenoising ? 0 : 1;
 
-      if (noiseReductionChanged) {
-        const now =
-          typeof performance === "undefined" ? Date.now() : performance.now();
-        levelerSettlingUntil = Math.max(
-          levelerSettlingUntil,
-          now + noiseReductionLevelerSettleMs,
-        );
-        currentAutoGain = Math.min(
-          currentAutoGain,
-          noiseReductionLevelerGainCeiling,
-        );
-        autoGain.gain.setTargetAtTime(
-          currentAutoGain,
-          activeAudioContext.currentTime,
-          0.12,
-        );
-      }
-
       rampSuppressionGain(
         immediateDryGain.gain,
         immediateDryBedGain,
@@ -595,7 +558,7 @@ export async function createEnhancedMicrophoneStream(
       }
     }
 
-    function updateLeveler(now: number) {
+    function updateMeterAndGate(now: number) {
       if (isStopped) {
         return;
       }
@@ -647,38 +610,6 @@ export async function createEnhancedMicrophoneStream(
         targetGateGain < currentGateGain ? 0.045 : 0.014,
       );
 
-      let targetGain = 1;
-      const voiceRms = isGateEnabled && !gateIsOpen ? 0 : rms;
-
-      if (voiceRms > activeVoiceFloorRms) {
-        targetGain = Math.min(
-          maximumAutoGain,
-          Math.max(minimumAutoGain, targetVoiceRms / voiceRms),
-        );
-      } else {
-        targetGain = Math.min(currentAutoGain, 1.35);
-      }
-
-      const isLevelerSettling = now < levelerSettlingUntil;
-
-      if (isLevelerSettling && targetGain > currentAutoGain) {
-        targetGain = Math.min(targetGain, Math.max(currentAutoGain, 1.15));
-      }
-
-      const smoothing = isLevelerSettling
-        ? targetGain < currentAutoGain
-          ? 0.18
-          : 0.012
-        : targetGain < currentAutoGain
-          ? 0.22
-          : 0.035;
-      currentAutoGain += (targetGain - currentAutoGain) * smoothing;
-      autoGain.gain.setTargetAtTime(
-        currentAutoGain,
-        activeAudioContext.currentTime,
-        isLevelerSettling ? 0.16 : targetGain < currentAutoGain ? 0.025 : 0.14,
-      );
-
       if (now - lastLevelPublishAt >= levelPublishIntervalMs) {
         const level = meterValueFromRms(rms);
         peakLevel = Math.max(level, peakLevel * 0.9);
@@ -694,7 +625,7 @@ export async function createEnhancedMicrophoneStream(
         });
       }
 
-      frameId = window.requestAnimationFrame(updateLeveler);
+      frameId = window.requestAnimationFrame(updateMeterAndGate);
     }
 
     applyProcessingSettings(processingSettings, 0.01);
@@ -707,7 +638,7 @@ export async function createEnhancedMicrophoneStream(
         }
       });
     void activeAudioContext.resume().catch(() => undefined);
-    frameId = window.requestAnimationFrame(updateLeveler);
+    frameId = window.requestAnimationFrame(updateMeterAndGate);
 
     if (destination.stream.getAudioTracks().length === 0) {
       throw new Error("processed-microphone-unavailable");
@@ -746,8 +677,6 @@ export async function createEnhancedMicrophoneStream(
         disconnectNode(rnnoiseGain);
         disconnectNode(suppressionMix);
         disconnectNode(gateGain);
-        disconnectNode(autoGain);
-        disconnectNode(compressor);
         disconnectNode(limiter);
         disconnectNode(outputGain);
         disconnectNode(analyser);

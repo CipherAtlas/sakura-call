@@ -171,6 +171,7 @@ async function generateCloudflareIceServers(): Promise<CredentialCacheEntry> {
         "content-type": "application/json",
       },
       method: "POST",
+      signal: AbortSignal.timeout(8_000),
     },
   );
 

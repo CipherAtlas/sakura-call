@@ -2,7 +2,7 @@ import OpenAI, { toFile } from "openai";
 import type { Language } from "./i18n";
 import { languageName } from "./i18n";
 
-const defaultTranscriptionModel = "gpt-4o-transcribe";
+const defaultTranscriptionModel = "gpt-transcribe";
 const nonEnglishScriptPattern =
   /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/u;
 const hangulScriptPattern = /[\uac00-\ud7af]/u;
@@ -64,23 +64,31 @@ function hasWrongScript(text: string, language: Language) {
 async function transcribeWithPrompt({
   audio,
   language,
-  strict
+  strict,
+  signal
 }: {
   audio: Buffer;
   language: Language;
   strict: boolean;
+  signal?: AbortSignal;
 }) {
   const file = await toFile(audio, `speech-${Date.now()}.wav`, {
     type: "audio/wav"
   });
 
+  const model = getTranscriptionModel();
+  // The SDK forwards these multipart fields even before its types include languages.
+  const languageHint = model === "gpt-transcribe" || model.startsWith("gpt-transcribe-")
+    ? { languages: [language] }
+    : { language };
+
   const transcription = await getOpenAIClient().audio.transcriptions.create({
     file,
-    model: getTranscriptionModel(),
-    language,
+    model,
+    ...languageHint,
     response_format: "json",
     prompt: transcriptionPrompt(language, strict)
-  });
+  }, { signal, timeout: 15_000, maxRetries: 0 });
 
   return transcription.text?.trim() ?? "";
 }
@@ -88,23 +96,27 @@ async function transcribeWithPrompt({
 export async function transcribeSpeech({
   audio,
   language,
-  isFinal
+  isFinal,
+  signal
 }: {
   audio: Buffer;
   language: Language;
   isFinal: boolean;
+  signal?: AbortSignal;
 }): Promise<string> {
   let text = await transcribeWithPrompt({
     audio,
     language,
-    strict: false
+    strict: false,
+    signal
   });
 
   if (text && hasWrongScript(text, language)) {
     text = await transcribeWithPrompt({
       audio,
       language,
-      strict: true
+      strict: true,
+      signal
     });
   }
 

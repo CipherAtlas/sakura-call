@@ -1,11 +1,11 @@
 "use client";
 
-import { Flower2, Languages, Leaf } from "lucide-react";
+import { Flower2, Languages, ArrowRight } from "lucide-react";
+import { EntryProgress } from "@/components/EntryProgress";
 import { useState } from "react";
 import type { Language } from "@/lib/i18n";
 import {
   isSupportedLanguage,
-  languageLabel,
   supportedLanguageOptions,
   t
 } from "@/lib/i18n";
@@ -30,17 +30,15 @@ export function LanguageGate({
             </header>
 
             <div className="entry-body">
-              <div className="entry-bubble" aria-hidden="true">
-                <Flower2 className="h-10 w-10" />
-              </div>
               <h1 className="garden-title entry-title">
                 <span>{t(selectedLanguage, "chooseLanguageTitle")}</span>
-                <span>{t(selectedLanguage, "chooseLanguageTitleSecondary")}</span>
+
               </h1>
               <p className="garden-muted entry-subtitle">
                 {t(selectedLanguage, "chooseLanguageHelp")}
               </p>
 
+              <EntryProgress language={selectedLanguage} step={1} />
               <form
                 className="entry-options"
                 aria-label={t(selectedLanguage, "chooseLanguageTitle")}
@@ -77,9 +75,8 @@ export function LanguageGate({
                 <button type="submit" className="garden-button entry-choice">
                   <span className="entry-choice-copy">
                     <span>{t(selectedLanguage, "continue")}</span>
-                    <small>{languageLabel(selectedLanguage)}</small>
                   </span>
-                  <Leaf className="h-5 w-5" aria-hidden="true" />
+                  <ArrowRight className="h-5 w-5" aria-hidden="true" />
                 </button>
               </form>
             </div>
@@ -92,19 +89,8 @@ export function LanguageGate({
             </footer>
           </div>
 
-          <div className="sakura-visual entry-visual" aria-hidden="true">
-            <div className="sakura-branch" />
-            <div className="sakura-bloom sakura-bloom-one" />
-            <div className="sakura-bloom sakura-bloom-two" />
-            <div className="sakura-bloom sakura-bloom-three" />
-            <div className="sakura-petal sakura-petal-one" />
-            <div className="sakura-petal sakura-petal-two" />
-            <div className="sakura-petal sakura-petal-three" />
-            <div className="sakura-petal sakura-petal-four" />
-            <div className="sakura-leaf sakura-leaf-one" />
-            <div className="sakura-leaf sakura-leaf-two" />
-          </div>
-        </div>
+          <div className="sakura-visual" aria-hidden="true" />
+</div>
       </section>
     </main>
   );

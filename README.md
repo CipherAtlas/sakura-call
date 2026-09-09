@@ -99,9 +99,29 @@ The meeting UI supports:
 - Conversation panel, draggable overlay, fullscreen conversation panel, and browser Picture-in-Picture captions where supported.
 - Settings panels for room code, theme, voice, connection path, managed relay status, and screen-share quality.
 
+The default theme is light; an explicitly saved light, dark, or system preference takes precedence. Desktop entry and pre-call setup use a full-page Sakura layout. Mobile keeps a compact layout with six primary call controls. More opens above its own button, and the pre-call Audio & devices menu also opens upward. Speaking animates the center avatar unless reduced motion is enabled. Completed captions remain in the conversation without a Final/確定 status badge. Japanese includes translations for all current UI strings. Conversation bubbles place your messages on the right and other speakers on the left. A translation into your chosen language appears first, with the original underneath; same-language messages appear once, and missing translations fall back to the original.
+
+Participant voice and screen-share playback use native audio elements with unity gain at full mixer volume. Playback adds no boost or compression. Track changes resynchronize playback, and user interaction retries paused playback. If a peer's camera arrives but their voice is silent, check their mute state, your deafen/mixer settings, and the selected output device; interact with the page to retry browser-blocked playback. Retest actual phone-to-laptop audio after applying playback changes.
+
+See [UI_REWORK.md](UI_REWORK.md) for implementation status and [design-qa.md](design-qa.md) for tested behavior and limitations. Apply pending builds only after the active call ends; restarting the on-demand server disconnects the room.
+
 Screen-sharing controls include presets for text clarity, balanced sharing, motion, 4K/ultra, and custom settings. Manual controls can set resolution cap, frame rate, bitrate, detail-vs-motion optimization, and whether screen sharing should be prioritized over camera video. The UI also reports actual screen-share stats when the browser exposes them.
 
+Screen video prefers H.264 during negotiation while retaining the browser's fallback and repair codecs. This is intended to make Apple's hardware encoding path available, but codec selection alone does not prove hardware acceleration. Capture resolution is capped at the selected dimensions. The actual-stream panel identifies the recipient with the highest reported RTT and shows their codec, encoder implementation and power-efficiency flag when exposed, recent encode time per frame, sent FPS, applied bitrate ceiling, and CPU/network limitation.
+
+Each recipient has a separate congestion response. Two degraded observations with a six-second cooldown lower the bitrate ceiling by a step; continued trouble eventually reduces the frame-rate cap to 30 and then scales resolution down. Five fresh healthy RTT observations and a twenty-second cooldown permit a single recovery step toward the chosen preset. Repeated old RTT readings and idle frames do not trigger adjustments. Browser congestion control remains active. Failed settings produce a notice and a diagnostic console warning; unsupported codec-preference APIs retain browser defaults. These policies have automated coverage but still need a real M4-to-phone call to verify hardware encoding, visual quality, and latency recovery.
+
 Screen-share audio is browser-limited. The most reliable case is sharing a Chrome tab with tab audio enabled. Safari, Firefox, window sharing, and entire-screen sharing may provide video only.
+
+Screen-share audio passes directly from capture to WebRTC with a music content hint and no app gain, compression, or limiting. Playback uses the native audio element with unity gain at full mixer volume. Screen audio advertises full-band stereo Opus preferences and a 192 kbps receive ceiling in offers and answers; microphone processing stays separate. Actual stereo, bitrate, and fidelity depend on capture support, browser negotiation, and network conditions. The negotiation tests do not replace a two-device listening comparison.
+
+## Shared Chat And Files
+
+The conversation combines typed messages and spoken captions. The rounded composer supports multiline text, Enter to send, Shift+Enter for a new line, and Japanese IME composition. Chat works while muted and while captions are off. When captions are on, originals arrive immediately and translations update the same bubble for each recipient's selected language. Failed translations keep the original readable. Text messages use the authenticated Socket.IO server connection; translated text is processed by OpenAI. Messages are limited to 4,000 characters and 30 sends per minute per connection, with bounded translation concurrency.
+
+Use the paperclip to choose a file, then Send to share its card. Other participants click Download; a circular percentage indicator reflects received bytes, and failed transfers offer Retry. Files are limited to 25 MiB each, with up to 100 MiB or 100 files retained per sender during a call. Filenames and sizes travel through the chat server, but file contents stay in the sender's browser until requested and transfer over a reliable WebRTC data channel. Bulk transfers are chunked and paced. The existing direct-first ICE/TURN fallback applies; TURN is not required by file size. A sender must remain in the call for downloads to finish. File contents are not sent to OpenAI or uploaded to server storage.
+
+Chat history is temporary browser state (the latest 200 typed messages); the server holds a bounded in-memory acknowledgement cache for duplicate-send protection, not a replayable chat archive. New arrivals and page reloads do not receive earlier chat history. Leaving the call releases shared file references and closes transfers. Files already saved by recipients remain on their devices.
 
 ## Captions And Translation
 
@@ -114,9 +134,13 @@ Captions are host-controlled. When the host starts the subtitle service:
 - Other participants receive translated caption events through Socket.IO.
 - Caption and conversation logs are held in browser state during the call.
 
+Caption capture uses an AudioWorklet for resampling, speech segmentation, and PCM WAV encoding. It preserves a 1.5-second silence boundary and a 12-second maximum utterance; this is chunked transcription, not realtime streaming. Stopping capture discards unfinished speech. Server requests are bounded, duplicate segments are ignored, and late results are discarded after stop, disconnect, or a newer completed segment. Translations are computed once per distinct recipient language in parallel.
+
 Remote audio is not transcribed from another participant's browser. Each browser submits only its own microphone while the caption service is running.
 
 Captions and translations are not end-to-end encrypted because microphone chunks are processed by this server and OpenAI. Audio, video, and screen-share media use the separate encrypted WebRTC media path.
+
+Model defaults are `gpt-transcribe` for transcription and `gpt-4o-mini` for translation. Transcription sends the selected spoken language using the new `languages` parameter; explicit older-model overrides retain `language`. See [current model options and migration considerations](MODEL_OPTIONS.md).
 
 ## Media And Relay Model
 
@@ -136,6 +160,8 @@ Testing behavior:
 - Use relay-only mode to validate TURN fallback.
 - Set it back to `all` for normal calls.
 
+TURN credential requests have an 8-second upstream deadline and failures return HTTP 503 instead of a successful STUN-only response. Configured relay status alone is not proof that a relay connection works.
+
 The settings modal includes a connection path panel. It polls WebRTC stats and reports each active peer path as direct P2P, TURN fallback, mixed, or waiting, with RTT when the browser exposes it.
 
 ## Microphone Processing
@@ -151,9 +177,10 @@ The microphone chain is:
 5. Apply RNNoise suppression when available.
 6. Blend in a delayed dry voice bed so high suppression stays natural.
 7. Apply a soft noise gate.
-8. Apply automatic voice leveling.
-9. Apply compression and limiting.
-10. Send the processed mono track to WebRTC.
+8. Apply peak limiting near clipping, with a small fixed output headroom.
+9. Send the mono track to WebRTC with full-band Opus receive preferences and a 96 kbps ceiling.
+
+The processing context requests 48 kHz. Automatic voice leveling and the speech compressor are removed so quiet and loud speech retain their natural dynamics; manual input volume, echo-cancellation policy, channel selection, noise gate, and suppression controls remain available. The default suppression level is 35%; existing saved settings are preserved. Turning suppression and the gate down to zero bypasses those stages for comparison. Playback no longer adds its previous 2.4x boost, so voice may be quieter. The ceiling is not proof of the actual transmitted bitrate or microphone bandwidth, and automated checks do not establish perceptual quality or bypass Bluetooth call-mode limitations.
 
 Voice settings include:
 
@@ -208,7 +235,7 @@ Server and storage:
 
 Required for local development:
 
-- Node.js 20 or newer.
+- Node.js 24 LTS (see `.nvmrc` and the `package.json` engine constraint).
 - npm.
 
 Required for captions:
@@ -228,10 +255,10 @@ Required for managed TURN fallback:
 
 ## Quick Start
 
-Install dependencies:
+Use Node.js 24 LTS (`nvm use` if you use nvm), then install locked dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Create a local environment file:
@@ -244,7 +271,7 @@ For a normal local setup, fill in:
 
 ```bash
 OPENAI_API_KEY=<openai-api-key>
-TRANSCRIPTION_MODEL=gpt-4o-transcribe
+TRANSCRIPTION_MODEL=gpt-transcribe
 TRANSLATION_MODEL=gpt-4o-mini
 NEXT_PUBLIC_STUN_URLS=stun:stun.l.google.com:19302
 NEXT_PUBLIC_ICE_TRANSPORT_POLICY=all
@@ -307,8 +334,9 @@ Use `.env.local` for local secrets. `.env` also works locally, but populated env
 
 | Variable | Purpose |
 | --- | --- |
+| `HOSTNAME` | Optional local bind address; defaults to `localhost`. Keep the app loopback-only behind the local Cloudflare Tunnel. |
 | `OPENAI_API_KEY` | Server-side OpenAI API key for transcription and translation. Required only when captions are used. |
-| `TRANSCRIPTION_MODEL` | Transcription model. Defaults to `gpt-4o-transcribe`. |
+| `TRANSCRIPTION_MODEL` | Transcription model. Defaults to `gpt-transcribe`. |
 | `TRANSLATION_MODEL` | Translation model. Defaults to `gpt-4o-mini`. |
 | `NEXT_PUBLIC_STUN_URLS` | Comma-separated STUN URLs. Defaults to `stun:stun.l.google.com:19302`. |
 | `NEXT_PUBLIC_ICE_TRANSPORT_POLICY` | `all` for normal peer-to-peer-first calls, `relay` for TURN-only testing. |
@@ -325,6 +353,8 @@ Use `.env.local` for local secrets. `.env` also works locally, but populated env
 | `CLOUDFLARE_TUNNEL_NAME` | Named Cloudflare Tunnel. Defaults to `sakura-call`. |
 | `CLOUDFLARE_SERVICE_URL` | Local service URL for tunnel ingress, usually `http://localhost:3010`. |
 | `SHUTDOWN_NOTICE_GRACE_MS` | Optional delay before shutdown notification redirect. Defaults to `750`. |
+
+The custom HTTP server binds to `localhost` by default (`HOSTNAME` may override it). Client IP identity uses `CF-Connecting-IP` only for requests arriving through loopback with the configured Cloudflare hostname; untrusted `X-Forwarded-For` headers are ignored. HTTP room-code lookup and Socket.IO joins share a 20-attempt/minute/IP budget. HTTP JSON bodies are limited to 16 KiB with a 10-second body deadline.
 
 In production, state-changing HTTP routes and Socket.IO handshakes are origin-checked. Allowed origins come from localhost defaults, `CLOUDFLARE_HOSTNAME`, and `APP_ALLOWED_ORIGINS`.
 
@@ -382,7 +412,7 @@ npm run start         # Start the production app on the default port
 npm run start:public  # Start the production app on port 3010
 npm run lint          # Run ESLint
 npm run typecheck     # Run TypeScript without emitting files
-npm test              # Run server tests
+npm test              # Run server, signaling, and audio processing tests
 npm run tunnel:setup  # Create or update Cloudflare Tunnel and DNS
 npm run tunnel:run    # Run the Cloudflare Tunnel helper
 ./run.sh              # Build, start app, start tunnel, and clean up on exit
@@ -398,7 +428,12 @@ components/CallRoom.tsx       Meeting room, WebRTC state, controls, captions, fu
 components/CallRoomModals.tsx Settings, voice, layout, leave, and screen-share quality modals
 components/SubtitlesPanel.tsx Conversation and translated caption panels
 components/VideoGrid.tsx      Participant and screen-share media layouts
-lib/audioCapture.ts           Browser speech segmentation and WAV encoding for captions
+lib/audioCapture.ts           AudioWorklet capture lifecycle for captions
+public/worklets/              Caption resampling, speech segmentation, and WAV encoding
+lib/captionPictureInPicture.ts Caption PiP rendering
+components/CallAudioSink.tsx   Remote audio playback, gain processing, and output selection
+server/captions.ts             Caption validation and cancellable transcription/translation
+server/requestSafety.ts        Bounded HTTP JSON reads and shared join throttling
 lib/audioEnhancement.ts       Browser mic mono mix, RNNoise, gate, leveling, compression, and limiting
 lib/i18n.ts                   Supported languages and UI strings
 lib/roomCode.ts               Session storage helpers for room codes and participant session tokens
@@ -446,7 +481,8 @@ Before a real call, confirm:
 
 - `npm run lint` passes.
 - `npm run typecheck` passes.
-- `npm test` passes.
+- `npm test` passes (provider calls are mocked; worklet processing uses synthetic audio).
+- `npm audit` and `npm audit --omit=dev` report no known vulnerabilities for the locked tree.
 - `npm run build` passes.
 - `npm run tunnel:setup` succeeds after Cloudflare tunnel changes.
 - `./run.sh` starts the app and Cloudflare Tunnel.

@@ -1,10 +1,16 @@
 "use client";
 
+import type { ScreenShareStatsSnapshot } from "@/lib/screenShareStreaming";
+
+import {
+  screenSharePresetDefaults,
+  type ScreenSharePresetId,
+  type ScreenShareQualitySettings,
+} from "@/lib/screenShareQuality";
+
 import {
   Camera,
-  Copy,
-  Flower2,
-  LayoutGrid,
+  Check,
   Mic,
   MicOff,
   Monitor,
@@ -58,25 +64,6 @@ type TurnStatus = {
   updatedAt: number;
 };
 
-type ScreenSharePresetId =
-  | "detail"
-  | "balanced"
-  | "motion"
-  | "ultra"
-  | "custom";
-
-type ScreenShareOptimization = "detail" | "motion";
-
-type ScreenShareQualitySettings = {
-  presetId: ScreenSharePresetId;
-  width: number;
-  height: number;
-  frameRate: number;
-  bitrateKbps: number;
-  optimization: ScreenShareOptimization;
-  prioritizeScreen: boolean;
-};
-
 type ScreenShareConnectionPath = "direct" | "relay" | "unknown";
 type ConnectionPathSummary = ScreenShareConnectionPath | "mixed";
 
@@ -88,15 +75,7 @@ type PeerConnectionPathSnapshot = {
   updatedAt: number;
 };
 
-type ScreenShareStatsSnapshot = {
-  width?: number;
-  height?: number;
-  fps?: number;
-  bitrateKbps?: number;
-  path: ScreenShareConnectionPath;
-  roundTripMs?: number;
-  limitation?: string;
-};
+
 
 type RemoteAudioParticipant = {
   displayName: string;
@@ -197,19 +176,11 @@ function screenSharePresetLabel(language: Language, presetId: ScreenSharePresetI
   }
 }
 
-function screenSharePresetHelp(language: Language, presetId: ScreenSharePresetId) {
-  switch (presetId) {
-    case "detail":
-      return t(language, "screenQualityDetailHelp");
-    case "balanced":
-      return t(language, "screenQualityBalancedHelp");
-    case "motion":
-      return t(language, "screenQualityMotionHelp");
-    case "ultra":
-      return t(language, "screenQualityUltraHelp");
-    case "custom":
-      return t(language, "screenQualityCustomHelp");
-  }
+function screenSharePresetHelp(language: Language, presetId: ScreenSharePresetId, current: ScreenShareQualitySettings) {
+  const settings = presetId === "custom" ? current : screenSharePresetDefaults[presetId];
+  const number = new Intl.NumberFormat(language);
+  const resolution = presetId === "custom" ? `${settings.width} × ${settings.height}` : `${settings.height}p`;
+  return `${resolution} · ${number.format(settings.frameRate)} fps · ${number.format(settings.bitrateKbps / 1000)} Mbps`;
 }
 
 function microphoneChannelModeLabel(
@@ -278,13 +249,7 @@ function SurfacePickerModal({
         <div className="settings-modal-ribbon" aria-hidden="true" />
         <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <LayoutGrid
-                className="garden-icon-blush h-4 w-4"
-                aria-hidden="true"
-              />
-              {t(language, "viewControl")}
-            </p>
+
             <h2
               className="garden-title mt-2 text-2xl"
               id="surface-picker-modal-title"
@@ -344,11 +309,12 @@ function SurfacePickerModal({
 }
 
 function LeaveConfirmationModal({
-  language,
+  isRoomHost,  language,
   onClose,
   onLeave,
   open,
 }: {
+  isRoomHost: boolean;
   language: Language;
   onClose: () => void;
   onLeave: () => void;
@@ -372,18 +338,12 @@ function LeaveConfirmationModal({
         <div className="settings-modal-ribbon" aria-hidden="true" />
         <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <PhoneOff
-                className="garden-icon-blush h-4 w-4"
-                aria-hidden="true"
-              />
-              {t(language, "leaveConfirmationKicker")}
-            </p>
+
             <h2
               className="garden-title mt-2 text-2xl"
               id="leave-confirmation-modal-title"
             >
-              {t(language, "leaveConfirmationTitle")}
+              {t(language, isRoomHost ? "endCallTitle" : "leaveConfirmationTitle")}
             </h2>
           </div>
           <button
@@ -402,7 +362,7 @@ function LeaveConfirmationModal({
               className="garden-muted text-base font-bold leading-snug"
               id="leave-confirmation-modal-body"
             >
-              {t(language, "leaveConfirmationBody")}
+              {t(language, isRoomHost ? "endCallBody" : "leaveConfirmationBody")}
             </p>
           </section>
 
@@ -421,7 +381,7 @@ function LeaveConfirmationModal({
               className="garden-button garden-button-danger h-12 px-5"
             >
               <PhoneOff className="h-5 w-5" aria-hidden="true" />
-              <span>{t(language, "leaveControl")}</span>
+              <span>{t(language, isRoomHost ? "endCallAction" : "leaveControl")}</span>
             </button>
           </div>
         </div>
@@ -459,13 +419,7 @@ function LayoutPickerModal({
         <div className="settings-modal-ribbon" aria-hidden="true" />
         <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <LayoutGrid
-                className="garden-icon-blush h-4 w-4"
-                aria-hidden="true"
-              />
-              {t(language, "viewControl")}
-            </p>
+
             <h2
               className="garden-title mt-2 text-2xl"
               id="view-layout-modal-title"
@@ -801,13 +755,10 @@ function CallSettingsModal({
   canManageTurnRelay,
   connectionPathRows,
   connectionPathSummary,
-  hostRoomCode,
-  isCodeCopied,
   language,
   localInputVolume,
   masterOutputVolume,
   onClose,
-  onCopyCode,
   onLanguageSelect,
   onLocalInputVolumeChange,
   onMasterOutputVolumeChange,
@@ -827,13 +778,10 @@ function CallSettingsModal({
   canManageTurnRelay: boolean;
   connectionPathRows: PeerConnectionPathSnapshot[];
   connectionPathSummary: ConnectionPathSummary;
-  hostRoomCode?: string;
-  isCodeCopied: boolean;
   language: Language;
   localInputVolume: number;
   masterOutputVolume: number;
   onClose: () => void;
-  onCopyCode: () => void;
   onLanguageSelect: (language: Language) => void;
   onLocalInputVolumeChange: (value: string) => void;
   onMasterOutputVolumeChange: (value: string) => void;
@@ -865,13 +813,7 @@ function CallSettingsModal({
         <div className="settings-modal-ribbon" aria-hidden="true" />
         <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <Flower2
-                className="garden-icon-blush h-4 w-4"
-                aria-hidden="true"
-              />
-              {t(language, "appName")}
-            </p>
+
             <h2
               className="garden-title mt-2 text-2xl"
               id="call-settings-modal-title"
@@ -890,39 +832,12 @@ function CallSettingsModal({
         </header>
 
         <div className="settings-modal-content grid gap-4 px-5 pb-5">
-          {hostRoomCode ? (
-            <section className="settings-modal-section settings-room-code-section">
-              <div className="flex items-start gap-3">
-                <div className="garden-bubble grid h-11 w-11 shrink-0 place-items-center rounded-full">
-                  <Copy className="h-5 w-5" aria-hidden="true" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="garden-text-muted text-sm font-black">
-                    {t(language, "roomCode")}
-                  </p>
-                  <button
-                    type="button"
-                    aria-label={
-                      isCodeCopied
-                        ? t(language, "copied")
-                        : t(language, "copyRoomCode")
-                    }
-                    onClick={onCopyCode}
-                    className="garden-button garden-button-quiet settings-room-code-button mt-3 h-14 w-full gap-2 px-4 text-2xl"
-                  >
-                    <Copy className="h-5 w-5 shrink-0" aria-hidden="true" />
-                    <span className="font-black">{hostRoomCode}</span>
-                  </button>
-                </div>
-              </div>
-            </section>
-          ) : null}
-
           <section className="settings-modal-section">
             <p className="garden-text-muted text-sm font-black">
               {t(language, "changeLanguage")}
             </p>
             <select
+              aria-label={t(language, "changeLanguage")}
               value={language}
               onChange={(event) => {
                 const nextLanguage = event.target.value;
@@ -978,15 +893,6 @@ function CallSettingsModal({
               screenShareAudioVolume={screenShareAudioVolume}
             />
           ) : null}
-
-          <section className="settings-modal-section">
-            <p className="garden-text-muted text-sm font-black">
-              {t(language, "captionPrivacyTitle")}
-            </p>
-            <p className="garden-muted mt-2 text-sm font-bold leading-snug">
-              {t(language, "captionPrivacyBody")}
-            </p>
-          </section>
 
           <ConnectionPathPanel
             connectionPathRows={connectionPathRows}
@@ -1082,10 +988,7 @@ function VoiceSettingsModal({
         <div className="settings-modal-ribbon" aria-hidden="true" />
         <header className="relative flex items-start justify-between gap-4 p-5 pb-4">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <Mic className="garden-icon-blush h-4 w-4" aria-hidden="true" />
-              {t(language, "voiceSettingsKicker")}
-            </p>
+
             <h2
               className="garden-title mt-2 text-2xl"
               id="voice-settings-modal-title"
@@ -1252,6 +1155,7 @@ function VoiceSettingsModal({
                 step="1"
                 type="range"
                 value={Math.round(voiceSettings.noiseReduction * 100)}
+                style={{ "--range-fill": `${Math.round(voiceSettings.noiseReduction * 100)}%` } as CSSProperties}
               />
             </div>
 
@@ -1314,6 +1218,7 @@ function VoiceSettingsModal({
                 step="1"
                 type="range"
                 value={Math.round(voiceSettings.noiseGate * 100)}
+                style={{ "--range-fill": `${Math.round(voiceSettings.noiseGate * 100)}%` } as CSSProperties}
               />
             </div>
 
@@ -1335,6 +1240,7 @@ function VoiceSettingsModal({
                 step="1"
                 type="range"
                 value={Math.round(localInputVolume * 100)}
+                style={{ "--range-fill": `${Math.round(localInputVolume * 100)}%` } as CSSProperties}
               />
             </div>
           </section>
@@ -1435,10 +1341,7 @@ function ScreenShareSettingsModal({
       >
         <header className="screen-quality-modal-header">
           <div className="min-w-0">
-            <p className="garden-kicker flex items-center gap-2">
-              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-              {t(language, "screenQualityKicker")}
-            </p>
+
             <h2
               id="screen-quality-modal-title"
               className="garden-title mt-1 text-2xl"
@@ -1473,21 +1376,26 @@ function ScreenShareSettingsModal({
                   key={presetId}
                   type="button"
                   onClick={() => onSelectPreset(presetId)}
+                  aria-pressed={screenShareQuality.presetId === presetId}
                   className={`screen-quality-preset ${
                     screenShareQuality.presetId === presetId
                       ? "is-selected"
                       : ""
                   }`}
                 >
-                  <span>{screenSharePresetLabel(language, presetId)}</span>
-                  <small>{screenSharePresetHelp(language, presetId)}</small>
+                  <span className="screen-quality-preset-title">
+                    {screenSharePresetLabel(language, presetId)}
+                    <span className="screen-quality-selection-mark" aria-hidden="true"><Check /></span>
+                  </span>
+                  <small>{screenSharePresetHelp(language, presetId, screenShareQuality)}</small>
                 </button>
               ))}
             </div>
           </section>
 
+          <details className="paper-disclosure screen-quality-advanced" key={screenShareQuality.presetId === "custom" ? "custom" : "preset"} open={screenShareQuality.presetId === "custom" ? true : undefined}>
+            <summary>{t(language, "advancedSettings")}</summary>
           <section className="screen-quality-section">
-            <h3>{t(language, "screenQualityManual")}</h3>
             <div className="screen-quality-fields">
               <label className="screen-quality-field">
                 <span>{t(language, "screenQualityResolution")}</span>
@@ -1573,32 +1481,6 @@ function ScreenShareSettingsModal({
           </section>
 
           <section className="screen-quality-section">
-            <h3>{t(language, "screenQualityOptimizeFor")}</h3>
-            <div className="screen-quality-segment">
-              <button
-                type="button"
-                onClick={() => onUpdateQuality({ optimization: "detail" })}
-                className={
-                  screenShareQuality.optimization === "detail"
-                    ? "is-selected"
-                    : ""
-                }
-              >
-                {t(language, "screenQualityOptimizeDetail")}
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdateQuality({ optimization: "motion" })}
-                className={
-                  screenShareQuality.optimization === "motion"
-                    ? "is-selected"
-                    : ""
-                }
-              >
-                {t(language, "screenQualityOptimizeMotion")}
-              </button>
-            </div>
-
             <label className="screen-quality-toggle">
               <input
                 type="checkbox"
@@ -1618,11 +1500,19 @@ function ScreenShareSettingsModal({
             </label>
           </section>
 
+          </details>
           {isScreenSharing ? (
             <section className="screen-quality-section screen-quality-stats">
               <h3>{t(language, "screenQualityActual")}</h3>
               {screenShareStats ? (
                 <dl>
+                  <div><dt>{t(language, "screenQualityRecipient")}</dt><dd>{screenShareStats.recipient ?? "—"}</dd></div>
+                  <div><dt>{t(language, "screenQualityCodec")}</dt><dd>{screenShareStats.codec ?? "—"}</dd></div>
+                  <div><dt>{t(language, "screenQualityEncoder")}</dt><dd>{screenShareStats.encoder ?? t(language, "screenQualityNotReported")}</dd></div>
+                  <div><dt>{t(language, "screenQualityEfficient")}</dt><dd>{screenShareStats.powerEfficient === undefined ? t(language, "screenQualityNotReported") : screenShareStats.powerEfficient ? t(language, "screenQualityYes") : t(language, "screenQualityNo")}</dd></div>
+                  <div><dt>{t(language, "screenQualityEncodeTime")}</dt><dd>{screenShareStats.encodeMs !== undefined ? `${screenShareStats.encodeMs.toFixed(1)} ms` : "—"}</dd></div>
+                  <div><dt>{t(language, "screenQualityLimit")}</dt><dd>{screenShareStats.bitrateLimitKbps !== undefined ? `${screenShareStats.bitrateLimitKbps} kbps` : "—"}</dd></div>
+                  <div><dt>{t(language, "screenQualityBottleneck")}</dt><dd>{screenShareStats.limitation === "cpu" ? t(language, "screenQualityCpu") : screenShareStats.limitation === "bandwidth" ? t(language, "screenQualityNetwork") : screenShareStats.limitation === "none" ? t(language, "screenQualityNone") : screenShareStats.limitation ?? t(language, "screenQualityNotReported")}</dd></div>
                   <div>
                     <dt>{t(language, "screenQualityResolution")}</dt>
                     <dd>
@@ -1671,12 +1561,9 @@ function ScreenShareSettingsModal({
                 <p>{t(language, "screenQualityWaitingStats")}</p>
               )}
             </section>
-          ) : (
-            <p className="screen-quality-notice">
-              {t(language, "screenQuality4kNotice")}
-            </p>
-          )}
+          ) : null}
 
+        </div>
           <div className="screen-quality-actions">
             <button
               type="button"
@@ -1698,22 +1585,20 @@ function ScreenShareSettingsModal({
                   : t(language, "screenQualityStart")}
             </button>
           </div>
-        </div>
       </section>
     </div>
   );
 }
 
 export const CallRoomModals = memo(function CallRoomModals({
+  isRoomHost,
   audioOutputDevices,
   callState,
   canManageTurnRelay,
   connectionPathRows,
   connectionPathSummary,
-  hostRoomCode,
   isApplyingScreenQuality,
   isAudioOutputSelectionSupported,
-  isCodeCopied,
   isPreparingMedia,
   isReplacingMicrophone,
   isScreenSharing,
@@ -1732,7 +1617,6 @@ export const CallRoomModals = memo(function CallRoomModals({
   onCloseSettings,
   onCloseSurfacePicker,
   onCloseVoiceSettings,
-  onCopyCode,
   onLanguageSelect,
   onLeaveCall,
   onLocalInputVolumeChange,
@@ -1774,15 +1658,14 @@ export const CallRoomModals = memo(function CallRoomModals({
   turnStatus,
   voiceSettings,
 }: {
+  isRoomHost: boolean;
   audioOutputDevices: MediaDeviceInfo[];
   callState: CallState;
   canManageTurnRelay: boolean;
   connectionPathRows: PeerConnectionPathSnapshot[];
   connectionPathSummary: ConnectionPathSummary;
-  hostRoomCode?: string;
   isApplyingScreenQuality: boolean;
   isAudioOutputSelectionSupported: boolean;
-  isCodeCopied: boolean;
   isPreparingMedia: boolean;
   isReplacingMicrophone: boolean;
   isScreenSharing: boolean;
@@ -1801,7 +1684,6 @@ export const CallRoomModals = memo(function CallRoomModals({
   onCloseSettings: () => void;
   onCloseSurfacePicker: () => void;
   onCloseVoiceSettings: () => void;
-  onCopyCode: () => void;
   onLanguageSelect: (language: Language) => void;
   onLeaveCall: () => void;
   onLocalInputVolumeChange: (value: string) => void;
@@ -1866,6 +1748,7 @@ export const CallRoomModals = memo(function CallRoomModals({
         titleKey={surfacePickerTitleKey}
       />
       <LeaveConfirmationModal
+        isRoomHost={isRoomHost}
         language={language}
         onClose={onCloseLeaveConfirmation}
         onLeave={onLeaveCall}
@@ -1883,13 +1766,10 @@ export const CallRoomModals = memo(function CallRoomModals({
         canManageTurnRelay={canManageTurnRelay}
         connectionPathRows={connectionPathRows}
         connectionPathSummary={connectionPathSummary}
-        hostRoomCode={hostRoomCode}
-        isCodeCopied={isCodeCopied}
         language={language}
         localInputVolume={localInputVolume}
         masterOutputVolume={masterOutputVolume}
         onClose={onCloseSettings}
-        onCopyCode={onCopyCode}
         onLanguageSelect={onLanguageSelect}
         onLocalInputVolumeChange={onLocalInputVolumeChange}
         onMasterOutputVolumeChange={onMasterOutputVolumeChange}

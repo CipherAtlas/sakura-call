@@ -26,6 +26,7 @@ export type Room = {
   maxParticipants: number;
   activeScreenShareParticipantId?: string;
   subtitleServiceStarted: boolean;
+  captionAbortController: AbortController;
   participants: Map<string, Participant>;
   failedAttempts: Map<string, FailedAttempts>;
 };
@@ -105,6 +106,7 @@ function cleanupRooms() {
 
   for (const [roomId, room] of rooms) {
     if (now - room.createdAt > roomTtlMs) {
+      room.captionAbortController.abort();
       rooms.delete(roomId);
       continue;
     }
@@ -118,6 +120,7 @@ function cleanupRooms() {
       }
 
       if (participant.isHost) {
+        room.captionAbortController.abort();
         rooms.delete(roomId);
         break;
       }
@@ -151,6 +154,7 @@ export function createRoom({ spokenLanguage }: { spokenLanguage: Language }): Ro
     createdAt: Date.now(),
     maxParticipants: maxRoomParticipants,
     subtitleServiceStarted: false,
+    captionAbortController: new AbortController(),
     participants: new Map(),
     failedAttempts: new Map()
   };
@@ -339,6 +343,7 @@ export function startSubtitleService(roomId: string, participantId: string) {
     return false;
   }
 
+  if (!room.subtitleServiceStarted) room.captionAbortController = new AbortController();
   room.subtitleServiceStarted = true;
   return true;
 }
@@ -351,6 +356,7 @@ export function stopSubtitleService(roomId: string, participantId: string) {
     return false;
   }
 
+  room.captionAbortController.abort();
   room.subtitleServiceStarted = false;
   return true;
 }
@@ -407,6 +413,7 @@ export function leaveRoom(roomId: string, participantId: string) {
   const participant = room.participants.get(participantId);
 
   if (participant?.isHost) {
+    room.captionAbortController.abort();
     rooms.delete(roomId);
     return { roomEnded: true, participant };
   }
@@ -453,6 +460,7 @@ export function expireDisconnectedParticipant(
   }
 
   if (participant.isHost) {
+    room.captionAbortController.abort();
     rooms.delete(roomId);
     return { expired: true, roomEnded: true, participant };
   }
@@ -495,5 +503,6 @@ export function findParticipantBySocket(socketId: string) {
 }
 
 export function resetRoomsForTests() {
+  for (const room of rooms.values()) room.captionAbortController.abort();
   rooms.clear();
 }

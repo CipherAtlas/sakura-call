@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import "./globals.css";
+import "./paper.css";
 
 export const metadata: Metadata = {
   title: "Sakura Call",
-  description: "Two-person WebRTC call with live translated subtitles.",
+  description: "Private audio and video calls for up to six people, with screen sharing and translated captions.",
   icons: {
     icon: "/icon.png",
     apple: "/icon.png"
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: "cover"
 };
 
@@ -25,7 +25,7 @@ const themeInitScript = `
     const theme =
       storedTheme === "light" || storedTheme === "dark" || storedTheme === "system"
         ? storedTheme
-        : "system";
+        : "light";
     const darkScheme =
       window.matchMedia &&
       window.matchMedia("(prefers-color-scheme: dark)").matches;

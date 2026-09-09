@@ -37,11 +37,11 @@ export function applyTheme(theme: ThemeMode) {
 
 export function getSavedTheme(): ThemeMode {
   if (typeof window === "undefined") {
-    return "system";
+    return "light";
   }
 
   const savedTheme = window.localStorage.getItem(themeStorageKey);
-  return isThemeMode(savedTheme) ? savedTheme : "system";
+  return isThemeMode(savedTheme) ? savedTheme : "light";
 }
 
 export function saveTheme(theme: ThemeMode) {

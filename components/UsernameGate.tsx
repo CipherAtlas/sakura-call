@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowLeft, Flower2, Leaf, UserRound } from "lucide-react";
+import { ArrowLeft, Flower2, Leaf } from "lucide-react";
+import { EntryProgress } from "@/components/EntryProgress";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { Language } from "@/lib/i18n";
@@ -49,9 +50,6 @@ export function UsernameGate({
             </header>
 
             <div className="entry-body">
-              <div className="entry-bubble" aria-hidden="true">
-                <UserRound className="h-10 w-10" />
-              </div>
               <h1 className="garden-title entry-title">
                 {t(language, "setUsernameTitle")}
               </h1>
@@ -59,6 +57,7 @@ export function UsernameGate({
                 {t(language, "setUsernameHelp")}
               </p>
 
+              <EntryProgress language={language} step={2} />
               <div className="entry-form-stack">
                 <label className="entry-label">
                   <span>
@@ -69,8 +68,9 @@ export function UsernameGate({
                     {t(language, "usernameLabel")}
                   </span>
                   <input
-                    autoFocus
-                    value={displayName}
+                                        value={displayName}
+                    autoComplete="nickname"
+                    enterKeyHint="next"
                     maxLength={32}
                     onChange={(event) => setDisplayName(event.target.value)}
                     placeholder={t(language, "usernamePlaceholder")}
@@ -97,19 +97,8 @@ export function UsernameGate({
             </footer>
           </div>
 
-          <div className="sakura-visual entry-visual" aria-hidden="true">
-            <div className="sakura-branch" />
-            <div className="sakura-bloom sakura-bloom-one" />
-            <div className="sakura-bloom sakura-bloom-two" />
-            <div className="sakura-bloom sakura-bloom-three" />
-            <div className="sakura-petal sakura-petal-one" />
-            <div className="sakura-petal sakura-petal-two" />
-            <div className="sakura-petal sakura-petal-three" />
-            <div className="sakura-petal sakura-petal-four" />
-            <div className="sakura-leaf sakura-leaf-one" />
-            <div className="sakura-leaf sakura-leaf-two" />
-          </div>
-        </form>
+          <div className="sakura-visual" aria-hidden="true" />
+</form>
       </section>
     </main>
   );

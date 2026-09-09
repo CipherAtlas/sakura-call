@@ -24,11 +24,13 @@ function getOpenAIClient() {
 export async function translateText({
   text,
   sourceLanguage,
-  targetLanguage
+  targetLanguage,
+  signal
 }: {
   text: string;
   sourceLanguage: Language;
   targetLanguage: Language;
+  signal?: AbortSignal;
 }): Promise<string> {
   const model = process.env.TRANSLATION_MODEL || defaultTranslationModel;
 
@@ -47,7 +49,7 @@ export async function translateText({
         )}:\n\n${text}`
       }
     ]
-  });
+  }, { signal, timeout: 10_000, maxRetries: 0 });
 
   return response.choices[0]?.message.content?.trim() ?? "";
 }

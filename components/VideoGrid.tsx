@@ -1,9 +1,10 @@
 "use client";
 
-import { Flower2, Leaf, Maximize2, ScreenShare } from "lucide-react";
+import { Flower2, Leaf, Maximize2, MicOff, VolumeX } from "lucide-react";
 import { memo, type KeyboardEvent } from "react";
 import type { Language } from "@/lib/i18n";
 import { t } from "@/lib/i18n";
+import { ScreenShareSurface } from "./ScreenShareSurface";
 
 export type MediaSurfaceId = string;
 export type MediaLayoutMode =
@@ -20,6 +21,8 @@ export type MediaSurface = {
   id: MediaSurfaceId;
   isLocal?: boolean;
   isSpeaking?: boolean;
+  isMuted?: boolean;
+  isDeafened?: boolean;
   kind: "participant" | "screen";
   label: string;
   status?: string;
@@ -59,6 +62,7 @@ function hasLiveVideoTrack(stream: MediaStream | null) {
 function renderParticipantSurface(
   surface: MediaSurface,
   slot: MediaSurfacePlacement,
+  language: Language,
   {
     fullscreenLabel,
     onFullscreenSurface,
@@ -121,71 +125,18 @@ function renderParticipantSurface(
             }`}
           />
           <p className="truncate">{surface.label}</p>
+          {surface.isMuted ? (
+            <span className="media-audio-status" role="img" aria-label={t(language, "muted")} title={t(language, "muted")}>
+              <MicOff aria-hidden="true" />
+            </span>
+          ) : null}
+          {surface.isDeafened ? (
+            <span className="media-audio-status" role="img" aria-label={t(language, "deafened")} title={t(language, "deafened")}>
+              <VolumeX aria-hidden="true" />
+            </span>
+          ) : null}
         </div>
-        {surface.status ? <span>{surface.status}</span> : null}
-      </div>
-      {onFullscreenSurface ? (
-        <button
-          type="button"
-          aria-label={fullscreenLabel}
-          className="media-fullscreen-button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onFullscreenSurface(surface.id);
-          }}
-        >
-          <Maximize2 className="h-4 w-4" aria-hidden="true" />
-        </button>
-      ) : null}
-    </article>
-  );
-}
-
-function renderScreenSurface(
-  surface: MediaSurface,
-  slot: MediaSurfacePlacement,
-  {
-    fullscreenLabel,
-    onFullscreenSurface,
-    onSelectSurface,
-    selectLabel,
-  }: {
-    fullscreenLabel: string;
-    onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
-    onSelectSurface?: (
-      surfaceId: MediaSurfaceId,
-      slot: MediaSurfacePlacement,
-    ) => void;
-    selectLabel: string;
-  },
-) {
-  const handleSelect = () => onSelectSurface?.(surface.id, slot);
-  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleSelect();
-    }
-  };
-
-  return (
-    <article
-      aria-label={selectLabel}
-      className={`media-surface screen-surface is-${slot}`}
-      onClick={handleSelect}
-      onKeyDown={handleKeyDown}
-      role="button"
-      tabIndex={0}
-    >
-      <video
-        ref={(element) => attachStreamToVideo(element, surface.stream)}
-        autoPlay
-        muted
-        playsInline
-        className="media-video screen-share-video"
-      />
-      <div className="media-label screen-share-label">
-        <ScreenShare className="h-4 w-4" aria-hidden="true" />
-        <span>{surface.label}</span>
+        {surface.status && !surface.isMuted && !surface.isDeafened ? <span>{surface.status}</span> : null}
       </div>
       {onFullscreenSurface ? (
         <button
@@ -208,6 +159,7 @@ function renderSurface(
   surface: MediaSurface,
   slot: MediaSurfacePlacement,
   actions: {
+    language: Language;
     fullscreenLabel: string;
     onFullscreenSurface?: (surfaceId: MediaSurfaceId) => void;
     onSelectSurface?: (
@@ -218,8 +170,8 @@ function renderSurface(
   },
 ) {
   return surface.kind === "screen"
-    ? renderScreenSurface(surface, slot, actions)
-    : renderParticipantSurface(surface, slot, actions);
+    ? <ScreenShareSurface key={surface.id} surface={surface} slot={slot} {...actions} />
+    : renderParticipantSurface(surface, slot, actions.language, actions);
 }
 
 function VideoGridComponent({
@@ -278,6 +230,7 @@ function VideoGridComponent({
       >
         <div className="media-dominant-slot">
           {renderSurface(dominantSharedSurface, "dominant", {
+            language,
             fullscreenLabel: t(language, "fullscreenSurface"),
             onFullscreenSurface,
             onSelectSurface,
@@ -289,6 +242,7 @@ function VideoGridComponent({
             {stripSurfaces.map((surface) => (
               <div className="media-gallery-tile" key={surface.id}>
                 {renderSurface(surface, "tile", {
+                  language,
                   fullscreenLabel: t(language, "fullscreenSurface"),
                   onFullscreenSurface,
                   onSelectSurface,
@@ -312,10 +266,11 @@ function VideoGridComponent({
 
     return (
       <section
-        className={`media-layout media-layout-group has-focus media-layout-${effectiveLayoutMode} ${participantDensityClass}`}
+        className={`media-layout media-layout-group has-focus media-layout-${effectiveLayoutMode} ${participantDensityClass} ${stripSurfaces.length === 1 ? "has-participant-inset" : ""}`}
       >
         <div className="media-dominant-slot">
           {renderSurface(preferredParticipant, "dominant", {
+            language,
             fullscreenLabel: t(language, "fullscreenSurface"),
             onFullscreenSurface,
             onSelectSurface,
@@ -327,6 +282,7 @@ function VideoGridComponent({
             {stripSurfaces.map((surface) => (
               <div className="media-gallery-tile" key={surface.id}>
                 {renderSurface(surface, "tile", {
+                  language,
                   fullscreenLabel: t(language, "fullscreenSurface"),
                   onFullscreenSurface,
                   onSelectSurface,
@@ -355,6 +311,7 @@ function VideoGridComponent({
             key={surface.id}
           >
             {renderSurface(surface, "tile", {
+              language,
               fullscreenLabel: t(language, "fullscreenSurface"),
               onFullscreenSurface,
               onSelectSurface,

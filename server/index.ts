@@ -6,6 +6,7 @@ import next from "next";
 import { isSupportedLanguage } from "../lib/i18n";
 import { parseCookies } from "./cookies";
 import { enforceMutationOrigin } from "./origin";
+import { consumeJoinAttempt, createRateLimiter, readJson, RequestError, requestIp, sendJson } from "./requestSafety";
 import { createSignalingServer } from "./signaling";
 import {
   ActiveRoomExistsError,
@@ -14,15 +15,11 @@ import {
   getRoom,
   getRoomByCode,
   isCreatorSecret,
-  isRoomParticipantSession,
   maxRoomParticipants,
   roomExists,
   type Room
 } from "./rooms";
-import {
-  getCloudflareTurnIceServers,
-  getTurnStatus,
-} from "./turn";
+import { handleTurnApi } from "./turnRoutes";
 
 const { loadEnvConfig } = nextEnv;
 
@@ -41,16 +38,9 @@ const ownerAccessToken = process.env.ROOM_OWNER_TOKEN || "";
 const ownerSessionSecret =
   process.env.ROOM_OWNER_SESSION_SECRET || ownerAccessToken;
 const ownerSessionMaxAge = 60 * 60 * 24 * 14;
-const defaultStunUrls = ["stun:stun.l.google.com:19302"];
 
-type RateLimitState = {
-  count: number;
-  resetAt: number;
-};
-
-const joinCodeRateLimits = new Map<string, RateLimitState>();
-const createRoomRateLimits = new Map<string, RateLimitState>();
-const ownerLoginRateLimits = new Map<string, RateLimitState>();
+const consumeOwnerLogin = createRateLimiter(8, 60_000);
+const consumeRoomCreation = createRateLimiter(6, 60_000);
 
 function headerValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -65,37 +55,6 @@ function forwardedProto(request: IncomingMessage) {
     ?.split(",")[0]
     ?.trim()
     .toLowerCase();
-}
-
-function requestIp(request: IncomingMessage) {
-  const forwardedFor = headerValue(request.headers["x-forwarded-for"]);
-  return (
-    forwardedFor?.split(",")[0]?.trim() ??
-    request.socket.remoteAddress ??
-    "unknown"
-  );
-}
-
-function consumeRateLimit(
-  bucket: Map<string, RateLimitState>,
-  key: string,
-  max: number,
-  windowMs: number
-) {
-  const now = Date.now();
-  const state = bucket.get(key);
-
-  if (!state || state.resetAt <= now) {
-    bucket.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-
-  if (state.count >= max) {
-    return false;
-  }
-
-  state.count += 1;
-  return true;
 }
 
 function ownerSessionValue() {
@@ -173,39 +132,17 @@ function redirectToHttps(request: IncomingMessage, response: ServerResponse) {
 }
 
 function applySecurityHeaders(request: IncomingMessage, response: ServerResponse) {
+  response.setHeader("x-content-type-options", "nosniff");
+  response.setHeader("x-frame-options", "DENY");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader("content-security-policy", "base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
+  response.setHeader("permissions-policy", "camera=(self), microphone=(self), display-capture=(self), speaker-selection=(self)");
   if (
     forwardedProto(request) === "https" &&
     requestHost(request) === publicHostname.toLowerCase()
   ) {
     response.setHeader("strict-transport-security", hstsHeaderValue);
   }
-}
-
-async function readJson(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-
-  if (chunks.length === 0) {
-    return null;
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-function sendJson(
-  response: ServerResponse,
-  statusCode: number,
-  body: unknown,
-  headers: Record<string, string> = {}
-) {
-  response.writeHead(statusCode, {
-    "content-type": "application/json",
-    ...headers
-  });
-  response.end(JSON.stringify(body));
 }
 
 function sleep(ms: number) {
@@ -239,43 +176,6 @@ function shouldUseSecureCookie(request: IncomingMessage) {
   return process.env.NODE_ENV === "production" && !isLocalHost(host);
 }
 
-function parseUrlList(value: string | undefined) {
-  return value
-    ?.split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-async function configuredIceServers({
-  includeTurn = false,
-  roomId = "",
-  participantId = "",
-  participantSessionToken = "",
-} = {}) {
-  const stunUrls = parseUrlList(process.env.NEXT_PUBLIC_STUN_URLS);
-  const iceServers: RTCIceServer[] = [
-    { urls: stunUrls && stunUrls.length > 0 ? stunUrls : defaultStunUrls }
-  ];
-
-  if (includeTurn && roomId && participantId && participantSessionToken) {
-    try {
-      const cloudflareIceServers = await getCloudflareTurnIceServers({
-        roomId,
-        participantId,
-        participantSessionToken,
-      });
-
-      if (cloudflareIceServers) {
-        return [...iceServers, ...cloudflareIceServers];
-      }
-    } catch (error) {
-      console.error("Cloudflare TURN credential generation failed:", error);
-    }
-  }
-
-  return iceServers;
-}
-
 async function handleOwnerApi(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
 
@@ -293,19 +193,12 @@ async function handleOwnerApi(request: IncomingMessage, response: ServerResponse
       return true;
     }
 
-    if (
-      !consumeRateLimit(
-        ownerLoginRateLimits,
-        `owner-login:${requestIp(request)}`,
-        8,
-        60_000
-      )
-    ) {
+    if (!consumeOwnerLogin(requestIp(request))) {
       sendJson(response, 429, { error: "too-many-attempts" });
       return true;
     }
 
-    const body = (await readJson(request).catch(() => null)) as {
+    const body = (await readJson(request)) as {
       token?: unknown;
     } | null;
     const token = typeof body?.token === "string" ? body.token : "";
@@ -341,62 +234,6 @@ async function handleOwnerApi(request: IncomingMessage, response: ServerResponse
   return false;
 }
 
-async function handleTurnApi(request: IncomingMessage, response: ServerResponse) {
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
-
-  if (request.method === "POST" && url.pathname === "/api/ice-servers") {
-    const body = (await readJson(request).catch(() => null)) as {
-      roomId?: unknown;
-      participantId?: unknown;
-      participantSessionToken?: unknown;
-    } | null;
-    const roomId = typeof body?.roomId === "string" ? body.roomId : "";
-    const participantId =
-      typeof body?.participantId === "string" ? body.participantId : "";
-    const participantSessionToken =
-      typeof body?.participantSessionToken === "string"
-        ? body.participantSessionToken
-        : "";
-
-    if (
-      !isRoomParticipantSession(
-        roomId,
-        participantId,
-        body?.participantSessionToken
-      )
-    ) {
-      sendJson(response, 403, { error: "participant-session-required" });
-      return true;
-    }
-
-    sendJson(response, 200, {
-      iceServers: await configuredIceServers({
-        includeTurn: true,
-        participantId,
-        participantSessionToken,
-        roomId,
-      }),
-      iceTransportPolicy:
-        process.env.NEXT_PUBLIC_ICE_TRANSPORT_POLICY === "relay"
-          ? "relay"
-          : "all"
-    });
-    return true;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/turn/status") {
-    if (!isOwnerRequest(request)) {
-      sendJson(response, 403, { error: "owner-required" });
-      return true;
-    }
-
-    sendJson(response, 200, getTurnStatus());
-    return true;
-  }
-
-  return false;
-}
-
 async function handleRoomApi(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? hostname}`);
 
@@ -406,19 +243,12 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
       return true;
     }
 
-    if (
-      !consumeRateLimit(
-        createRoomRateLimits,
-        `create-room:${requestIp(request)}`,
-        6,
-        60_000
-      )
-    ) {
+    if (!consumeRoomCreation(requestIp(request))) {
       sendJson(response, 429, { error: "too-many-attempts" });
       return true;
     }
 
-    const body = (await readJson(request).catch(() => null)) as {
+    const body = (await readJson(request)) as {
       spokenLanguage?: unknown;
     } | null;
 
@@ -468,19 +298,12 @@ async function handleRoomApi(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/api/rooms/join") {
-    if (
-      !consumeRateLimit(
-        joinCodeRateLimits,
-        `join-code:${requestIp(request)}`,
-        12,
-        60_000
-      )
-    ) {
+    if (!consumeJoinAttempt(requestIp(request))) {
       sendJson(response, 429, { error: "too-many-attempts" });
       return true;
     }
 
-    const body = (await readJson(request).catch(() => null)) as {
+    const body = (await readJson(request)) as {
       roomCode?: unknown;
     } | null;
     const roomCode =
@@ -558,7 +381,7 @@ const httpServer = createServer((request, response) => {
       return;
     }
 
-    if (await handleTurnApi(request, response)) {
+    if (await handleTurnApi(request, response, isOwnerRequest)) {
       return;
     }
 
@@ -567,12 +390,26 @@ const httpServer = createServer((request, response) => {
     }
 
     await handle(request, response);
-  })();
+  })().catch((error: unknown) => {
+    if (response.destroyed) return;
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
+    const status = error instanceof RequestError ? error.statusCode : 500;
+    if (status === 500) console.error("HTTP request failed");
+    sendJson(response, status, {
+      error: error instanceof RequestError ? error.message : "internal-error"
+    });
+  });
 });
 
 const io = createSignalingServer(httpServer);
 
-httpServer.listen(port, () => {
+httpServer.requestTimeout = 15_000;
+httpServer.headersTimeout = 10_000;
+
+httpServer.listen(port, hostname, () => {
   console.log(`Ready on http://${hostname}:${port}`);
 });
 

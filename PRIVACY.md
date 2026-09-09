@@ -22,9 +22,9 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 - The OpenAI API key stays server-side.
 - The meeting UI separates the media-encryption boundary from the host-controlled captions/OpenAI processing boundary while captions are running.
 - Cloudflare Realtime TURN credentials are generated server-side only for authenticated room participants. Calls remain peer-to-peer first and use TURN only when ICE needs relay fallback.
-- The production dependency audit currently reports no vulnerabilities after updating the PostCSS dependency used by Next through npm overrides.
+- On September 8, 2026, the refreshed dependency tree reported zero known vulnerabilities in `npm audit` and `npm audit --omit=dev`. This is a dated check, not a permanent security guarantee.
 
-## Changes In The Current Hardening Pass
+## Implemented Protections
 
 - Socket.IO events after join are bound to the server-side socket participant session. WebRTC signaling, media state, language changes, subtitle controls, audio segments, and leave events no longer trust client-supplied `participantId`, `from`, or `roomId` as the authority.
 - Successful joins now receive a server-issued participant session token. Rejoining an existing participant requires that token, so a client cannot reclaim a participant slot just by guessing or copying a `participantId`.
@@ -32,7 +32,12 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 - Socket.IO now rejects disallowed origins during the handshake.
 - State-changing HTTP routes reject requests from disallowed `Origin` headers, and production also rejects missing-origin mutation requests.
 - Allowed origins come from localhost defaults, `CLOUDFLARE_HOSTNAME`, and optional comma-separated `APP_ALLOWED_ORIGINS`.
-- Dependencies were refreshed within the current framework line, and `postcss` is forced to the patched root version through `overrides`.
+- Dependencies were refreshed within Next.js 15; the PostCSS override follows the patched root version. Node.js 24 LTS is the documented and pinned runtime.
+- HTTP and Socket.IO joins share an IP-based attempt budget that survives socket/participant-id replacement. Cloudflare client identity is accepted only through the local tunnel boundary.
+- JSON bodies have size/time limits; unexpected HTTP errors receive a controlled response. Caption input must match the browser's PCM WAV format before reaching a provider.
+- Caption requests have cancellation/deadlines and bounded concurrency. Stop/end/disconnect invalidates in-flight work; duplicate and superseded results are suppressed. A failed translation does not prevent other languages from receiving captions.
+- HTTP responses set `nosniff`, `no-referrer`, `DENY` framing, and camera/microphone/display-capture/speaker-selection policies. The baseline CSP restricts base URLs, objects, and frame ancestors; it does not yet restrict scripts with nonces.
+- API JSON responses use `Cache-Control: no-store`. TURN upstream failures return 503, and credential generation has a deadline.
 
 ## Remaining Risks And Priorities
 
@@ -45,8 +50,8 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 
 ### P1: Should Do Before Presenting As A Serious Developer Tool
 
-- Add a `Content-Security-Policy`, `frame-ancestors 'none'`, `X-Content-Type-Options`, `Referrer-Policy`, and a camera/microphone/screen-share `Permissions-Policy`.
-- Add focused tests for room join, invalid session token rejection, reconnect reclaim, room-capacity enforcement, origin rejection, and host-only subtitle/TURN controls.
+- Evaluate a nonce-based script CSP with browser verification of Next.js hydration, RNNoise WASM, media, and PiP. The current CSP deliberately covers base/object/framing restrictions only.
+- Automated tests cover room/session/capacity rules, Socket.IO origin and host-only subtitle checks, reconnect throttling, malformed HTTP/audio input, caption cancellation/order, TURN route authority/failures/deadlines, and synthetic AudioWorklet output. Real-device media, relay-only calls, and live provider quality still need integration/manual verification.
 - Add structured server logs that avoid transcript, audio, room code, token, and TURN credential content.
 - Document OpenAI retention settings for the operator, including whether Zero Data Retention or modified abuse monitoring is enabled for the API organization.
 
@@ -63,3 +68,11 @@ Sakura Call is designed as a private, self-hosted, host-sized, peer-to-peer-firs
 The accurate positioning is: self-hosted, ephemeral, host-sized, peer-to-peer-first WebRTC calling with host-controlled AI captions.
 
 Avoid claiming that the whole product is fully private or end-to-end encrypted in the same sense as a dedicated E2EE messenger. A precise claim is: audio, video, and screen sharing use encrypted WebRTC media transport between participating browsers, including when relayed through TURN; host-controlled captions/translations are not end-to-end encrypted because local microphone segments are processed by this server and OpenAI.
+
+## Shared Chat And Requested File Downloads
+
+Typed messages and attachment metadata pass through the authenticated room Socket.IO connection and are not end-to-end encrypted. With captions enabled, message text is sent to OpenAI for translation into recipient languages. Originals remain readable when translation fails. Server-side membership, text/file limits, send rate limits, and bounded translation concurrency apply.
+
+File contents are retained in the sender's browser and transferred only after a recipient requests a download over encrypted WebRTC data channels. The server and OpenAI do not receive file contents; existing managed TURN can relay the encrypted transfer when a direct path fails. Each file is limited to 25 MiB; sender retention and simultaneous transfers are bounded. The UI renders filenames as text and saves received content as a download rather than executing or previewing it. Transfers stop when peer connections close; downloaded files remain under the recipient's control.
+
+Chat and shared-file references are temporary. There is no disk-backed chat/file storage, account history, or history replay. Automated file-transfer checks use simulated data channels; actual cross-device downloads and translation-provider performance require a live manual check.

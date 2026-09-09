@@ -51,7 +51,8 @@ export async function refreshPeerConnectionIceServers(
     headers: {
       "content-type": "application/json"
     },
-    method: "POST"
+    method: "POST",
+    signal: AbortSignal.timeout(10_000)
   });
 
   if (!response.ok) {
